@@ -39,7 +39,7 @@ int runSelfTest() {
   const Ship& ship = w.player().ship;
   std::printf("    %d parts, %.1f t, inertia (%.0f, %.0f, %.0f) kg m2\n", (int)ship.parts.size(), ship.stats.mass / 1000,
               ship.stats.inertia.x, ship.stats.inertia.y, ship.stats.inertia.z);
-  check(ship.parts.size() >= 120, "ship is built from 120+ individual parts");
+  check(ship.parts.size() >= 90, "ship is built from 90+ individual parts");
   float t;
   int hit = ship.raycast(Vec3(5, 10, 2), Vec3(0, -1, 0), 20, t);
   check(hit >= 0 && ship.parts[hit].name.find("WING") != std::string::npos, "a shot from above the starboard wing hits a wing part");

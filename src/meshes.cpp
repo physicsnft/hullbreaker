@@ -322,6 +322,213 @@ MeshData makeNozzle() { // bell, narrow at the throat (-Z), flaring aft
   return makeLoft(st);
 }
 
+// =====================================================================================
+// The fighter's own meshes. They are modelled in ship coordinates (metres; -Z forward,
+// +Y up), then each is normalised into the unit cube. shipMeshInfo() gives the box each
+// one occupies on the ship, which is where the matching part is placed.
+// =====================================================================================
+struct SMesh {
+  std::vector<Vec3> p, n;
+  std::vector<uint32_t> idx;
+  uint32_t v(Vec3 a, Vec3 normal = Vec3()) { p.push_back(a); n.push_back(normal); return (uint32_t)p.size() - 1; }
+  // `out` is roughly the outward direction; it fixes the winding. With `accumulate` the
+  // face normal is added to its vertices (smooth shading across shared vertices).
+  void tri(uint32_t a, uint32_t b, uint32_t c, Vec3 out, bool accumulate = true) {
+    Vec3 g = cross(p[b] - p[a], p[c] - p[a]);
+    if (dot(g, out) < 0) { std::swap(b, c); g = -g; }
+    if (accumulate) { n[a] += g; n[b] += g; n[c] += g; }
+    idx.push_back(a); idx.push_back(b); idx.push_back(c);
+  }
+  void quad(uint32_t a, uint32_t b, uint32_t c, uint32_t d, Vec3 out, bool accumulate = true) { tri(a, b, c, out, accumulate); tri(a, c, d, out, accumulate); }
+  MeshData finish(ShipMeshInfo& info) {
+    Vec3 lo(1e9f), hi(-1e9f);
+    for (auto& q : p) for (int a = 0; a < 3; ++a) { lo[a] = std::min(lo[a], q[a]); hi[a] = std::max(hi[a], q[a]); }
+    info.center = (lo + hi) * 0.5f;
+    info.size = hi - lo;
+    for (int a = 0; a < 3; ++a) info.size[a] = std::max(info.size[a], 0.01f);
+    MeshData m;
+    for (size_t i = 0; i < p.size(); ++i) {
+      Vec3 u = divv(p[i] - info.center, info.size);
+      Vec3 nn = normalize(mulv(normalize(n[i], Vec3(0, 1, 0)), info.size), Vec3(0, 1, 0)); // normals scale inversely to positions
+      m.verts.push_back({u.x, u.y, u.z, nn.x, nn.y, nn.z});
+    }
+    m.idx = idx;
+    return m;
+  }
+};
+
+// ---- fuselage master shape: cross-sections at control stations, interpolated smoothly
+struct Sec { float z, w, ht, hb, yc, n; };
+const Sec kFuse[] = {
+    {-10.6f, 0.02f, 0.02f, 0.02f, -0.08f, 2.0f}, {-10.0f, 0.15f, 0.13f, 0.12f, -0.08f, 2.2f}, {-9.0f, 0.31f, 0.27f, 0.23f, -0.07f, 2.4f},
+    {-7.5f, 0.53f, 0.43f, 0.37f, -0.05f, 2.6f},  {-6.0f, 0.75f, 0.58f, 0.50f, -0.02f, 2.8f},  {-5.0f, 0.89f, 0.72f, 0.58f, 0.0f, 2.8f},
+    {-4.0f, 1.00f, 0.86f, 0.66f, 0.0f, 2.7f},    {-3.0f, 1.09f, 0.92f, 0.73f, 0.0f, 2.7f},    {-2.0f, 1.17f, 0.92f, 0.79f, 0.0f, 3.0f},
+    {-1.0f, 1.25f, 0.89f, 0.83f, 0.0f, 3.3f},    {0.0f, 1.31f, 0.87f, 0.86f, 0.0f, 3.5f},     {2.0f, 1.37f, 0.85f, 0.86f, 0.0f, 3.5f},
+    {3.5f, 1.40f, 0.83f, 0.82f, 0.02f, 3.3f},    {5.0f, 1.30f, 0.75f, 0.72f, 0.05f, 3.0f},    {6.2f, 1.00f, 0.58f, 0.54f, 0.10f, 2.6f},
+    {7.2f, 0.60f, 0.36f, 0.30f, 0.14f, 2.3f},    {7.7f, 0.30f, 0.18f, 0.14f, 0.16f, 2.0f}};
+const int kFuseN = sizeof(kFuse) / sizeof(kFuse[0]);
+Sec fuse(float z) {
+  int i = 0;
+  while (i < kFuseN - 2 && z > kFuse[i + 1].z) ++i;
+  const Sec &a = kFuse[std::max(i - 1, 0)], &b = kFuse[i], &c = kFuse[i + 1], &d = kFuse[std::min(i + 2, kFuseN - 1)];
+  float t = clampf((z - b.z) / (c.z - b.z), 0.0f, 1.0f);
+  auto cr = [&](float Sec::*f) { // Catmull-Rom with tangents scaled for uneven spacing
+    float m0 = (c.*f - a.*f) / std::max(c.z - a.z, 1e-3f) * (c.z - b.z), m1 = (d.*f - b.*f) / std::max(d.z - b.z, 1e-3f) * (c.z - b.z);
+    float t2 = t * t, t3 = t2 * t;
+    return (2 * t3 - 3 * t2 + 1) * (b.*f) + (t3 - 2 * t2 + t) * m0 + (-2 * t3 + 3 * t2) * (c.*f) + (t3 - t2) * m1;
+  };
+  Sec s{z, std::max(cr(&Sec::w), 0.02f), std::max(cr(&Sec::ht), 0.02f), std::max(cr(&Sec::hb), 0.02f), cr(&Sec::yc), std::max(cr(&Sec::n), 2.0f)};
+  return s;
+}
+Vec3 secPoint(const Sec& s, float ang, float grow = 0) {
+  float c = std::cos(ang), sn = std::sin(ang), e = 2.0f / s.n;
+  Vec3 q(s.w * (c < 0 ? -1.0f : 1.0f) * std::pow(std::fabs(c), e), (sn >= 0 ? s.ht : s.hb) * (sn < 0 ? -1.0f : 1.0f) * std::pow(std::fabs(sn), e), 0);
+  if (grow != 0) q += normalize(Vec3(q.x / (s.w * s.w), q.y / sqr(sn >= 0 ? s.ht : s.hb), 0), Vec3(0, 1, 0)) * grow;
+  return Vec3(q.x, q.y + s.yc, s.z);
+}
+// a closed body lofted through sections given by `sec`, between z0 and z1
+template <class F>
+MeshData loftBody(F sec, float z0, float z1, ShipMeshInfo& info, int segs = 56, float dz = 0.16f) {
+  SMesh m;
+  int rings = std::max(2, (int)std::ceil((z1 - z0) / dz) + 1);
+  std::vector<uint32_t> base;
+  for (int k = 0; k < rings; ++k) {
+    Sec s = sec(lerpf(z0, z1, (float)k / (rings - 1)));
+    base.push_back((uint32_t)m.p.size());
+    for (int i = 0; i < segs; ++i) m.v(secPoint(s, 2 * PI * (i + 0.5f) / segs));
+  }
+  for (int k = 0; k + 1 < rings; ++k)
+    for (int i = 0; i < segs; ++i) {
+      uint32_t a = base[k] + i, b = base[k] + (i + 1) % segs, c = base[k + 1] + (i + 1) % segs, d = base[k + 1] + i;
+      Sec s = sec(lerpf(z0, z1, (k + 0.5f) / (rings - 1)));
+      Vec3 out = (m.p[a] + m.p[c]) * 0.5f - Vec3(0, s.yc, (m.p[a].z + m.p[c].z) * 0.5f);
+      m.quad(a, b, c, d, out);
+    }
+  for (int end = 0; end < 2; ++end) { // caps: only seen when the neighbouring section has been shot away
+    Sec s = sec(end ? z1 : z0);
+    Vec3 nrm(0, 0, end ? 1.0f : -1.0f);
+    uint32_t first = (uint32_t)m.p.size();
+    for (int i = 0; i < segs; ++i) m.v(secPoint(s, 2 * PI * (i + 0.5f) / segs), nrm);
+    uint32_t centre = m.v(Vec3(0, s.yc, s.z), nrm);
+    for (int i = 0; i < segs; ++i) m.tri(centre, first + i, first + (i + 1) % segs, nrm, false);
+  }
+  return m.finish(info);
+}
+// an armour plate that follows the hull: the master surface between two angles, raised by `thick`
+MeshData hullShell(float a0deg, float a1deg, float z0, float z1, float thick, ShipMeshInfo& info) {
+  SMesh m;
+  const float a0 = radians(a0deg), a1 = radians(a1deg);
+  const int na = std::max(4, (int)((a1deg - a0deg) / 4.0f)), nz = std::max(2, (int)((z1 - z0) / 0.16f));
+  const float bevel = 0.03f; // the plate's edges slope down to the hull
+  auto at = [&](int i, int k, float grow, float inset) {
+    float ta = (float)i / na, tz = (float)k / nz;
+    float a = lerpf(a0 + inset * 0.03f, a1 - inset * 0.03f, ta), z = lerpf(z0 + inset * bevel, z1 - inset * bevel, tz);
+    return secPoint(fuse(z), a, grow);
+  };
+  std::vector<uint32_t> top((size_t)(na + 1) * (nz + 1));
+  for (int k = 0; k <= nz; ++k)
+    for (int i = 0; i <= na; ++i) top[(size_t)k * (na + 1) + i] = m.v(at(i, k, thick, 1));
+  auto outAt = [&](Vec3 q) { Sec s = fuse(q.z); return q - Vec3(0, s.yc, q.z); };
+  for (int k = 0; k < nz; ++k)
+    for (int i = 0; i < na; ++i) {
+      uint32_t a = top[(size_t)k * (na + 1) + i], b = top[(size_t)k * (na + 1) + i + 1], c = top[(size_t)(k + 1) * (na + 1) + i + 1], d = top[(size_t)(k + 1) * (na + 1) + i];
+      m.quad(a, b, c, d, outAt(m.p[a]));
+    }
+  // bevelled rim, with its own vertices so the edge reads as a crisp step
+  auto rim = [&](int i0, int k0, int i1, int k1, Vec3 side) {
+    Vec3 pa = at(i0, k0, thick, 1), pb = at(i1, k1, thick, 1), qa = at(i0, k0, -0.01f, 0), qb = at(i1, k1, -0.01f, 0);
+    Vec3 out = normalize(outAt((pa + pb) * 0.5f)) + side * 1.5f;
+    uint32_t a = m.v(pa), b = m.v(pb), c = m.v(qb), d = m.v(qa);
+    m.quad(a, b, c, d, out);
+  };
+  Vec3 mid = at(na / 2, nz / 2, 0, 0);
+  for (int i = 0; i < na; ++i) { rim(i, 0, i + 1, 0, Vec3(0, 0, -1)); rim(i, nz, i + 1, nz, Vec3(0, 0, 1)); }
+  for (int k = 0; k < nz; ++k) {
+    rim(0, k, 0, k + 1, normalize(at(0, k, 0, 0) - mid));
+    rim(na, k, na, k + 1, normalize(at(na, k, 0, 0) - mid));
+  }
+  return m.finish(info);
+}
+// A surface of revolution about the Z axis through a profile of (z, radius) points. The
+// surface faces left of the direction of travel, so an outer skin is listed front to back
+// and an inner wall back to front: one profile can run out along a nozzle, round its lip
+// and back down the inside, which is how the hollow intakes and nozzles are made.
+MeshData lathe(const std::vector<Vec3>& prof, ShipMeshInfo& info, float capZ = 1e9f, float capR = 0, float capDir = 0, int segs = 48) {
+  SMesh m;
+  std::vector<Vec3> sn; // per profile segment: (radial, 0, axial) normal
+  for (size_t k = 0; k + 1 < prof.size(); ++k) {
+    float dz = prof[k + 1].x - prof[k].x, dr = prof[k + 1].y - prof[k].y, l = std::max(std::sqrt(dz * dz + dr * dr), 1e-6f);
+    sn.push_back(Vec3(dz / l, 0, -dr / l));
+  }
+  for (size_t k = 0; k + 1 < prof.size(); ++k) {
+    Vec3 n0 = sn[k], n1 = sn[k];
+    if (k > 0 && dot(sn[k - 1], sn[k]) > 0.6f) n0 = normalize(sn[k - 1] + sn[k]);
+    if (k + 2 < prof.size() && dot(sn[k + 1], sn[k]) > 0.6f) n1 = normalize(sn[k + 1] + sn[k]);
+    uint32_t base = (uint32_t)m.p.size();
+    for (int i = 0; i <= segs; ++i) {
+      float a = 2 * PI * i / segs, c = std::cos(a), s = std::sin(a);
+      m.v(Vec3(prof[k].y * c, prof[k].y * s, prof[k].x), Vec3(n0.x * c, n0.x * s, n0.z));
+      m.v(Vec3(prof[k + 1].y * c, prof[k + 1].y * s, prof[k + 1].x), Vec3(n1.x * c, n1.x * s, n1.z));
+    }
+    for (int i = 0; i < segs; ++i) {
+      float a = 2 * PI * (i + 0.5f) / segs;
+      Vec3 out(sn[k].x * std::cos(a), sn[k].x * std::sin(a), sn[k].z);
+      m.quad(base + i * 2, base + i * 2 + 1, base + i * 2 + 3, base + i * 2 + 2, out, false);
+    }
+  }
+  if (capR > 0) { // a flat disc across the bore (compressor face, bulkhead)
+    Vec3 nrm(0, 0, capDir);
+    uint32_t centre = m.v(Vec3(0, 0, capZ), nrm), first = (uint32_t)m.p.size();
+    for (int i = 0; i <= segs; ++i) m.v(Vec3(capR * std::cos(2 * PI * i / segs), capR * std::sin(2 * PI * i / segs), capZ), nrm);
+    for (int i = 0; i < segs; ++i) m.tri(centre, first + i, first + i + 1, nrm, false);
+  }
+  return m.finish(info);
+}
+
+ShipMeshInfo g_info[MESH_COUNT];
+bool g_infoReady = false;
+
+void buildShipMeshes(std::vector<MeshData>& out) {
+  // fuselage, cut into the sections that can be shot away separately
+  static const float cuts[6] = {-10.6f, -7.4f, -2.4f, 3.0f, 6.0f, 7.7f};
+  for (int i = 0; i < 5; ++i) out[M_S_NOSE + i] = loftBody(fuse, cuts[i], cuts[i + 1], g_info[M_S_NOSE + i]);
+  // canopy: a teardrop bubble sunk into the hull, and the coaming it sits in
+  auto bubble = [](float z, float grow, float low) {
+    Sec f = fuse(z);
+    float t = clampf((z + 5.75f) / 3.5f, 0.0f, 1.0f), shape = std::pow(std::sin(PI * std::pow(t, 0.72f)), 0.62f);
+    Sec s{z, std::max(0.56f * shape * grow + (grow > 1 ? 0.04f : 0.0f), 0.02f), std::max(0.66f * shape * low, 0.02f), 0.12f, f.yc + f.ht - 0.14f, grow > 1 ? 3.0f : 2.15f};
+    return s;
+  };
+  out[M_S_CANOPY] = loftBody([&](float z) { return bubble(z, 1.0f, 1.0f); }, -5.75f, -2.25f, g_info[M_S_CANOPY], 40, 0.1f);
+  out[M_S_SILL] = loftBody([&](float z) { return bubble(z, 1.14f, 0.3f); }, -5.75f, -2.25f, g_info[M_S_SILL], 40, 0.1f);
+  // dorsal spine fairing running aft from the canopy
+  out[M_S_SPINE] = loftBody([](float z) {
+    Sec f = fuse(z);
+    float t = clampf((z + 2.5f) / 8.6f, 0.0f, 1.0f), ends = std::pow(std::sin(PI * clampf(t * 0.94f + 0.03f, 0.0f, 1.0f)), 0.4f);
+    Sec s{z, std::max(lerpf(0.40f, 0.20f, t) * ends, 0.02f), std::max(lerpf(0.44f, 0.14f, t) * ends, 0.02f), 0.12f, f.yc + f.ht - 0.13f, 2.6f};
+    return s;
+  }, -2.5f, 6.1f, g_info[M_S_SPINE], 32, 0.2f);
+  // armour plates
+  static const float shells[13][4] = {{6, 40, -1.8f, 2.6f},   {140, 174, -1.8f, 2.6f}, {238, 302, -2.0f, 2.6f}, {-28, 28, -6.6f, -2.8f}, {152, 208, -6.6f, -2.8f},
+                                      {240, 300, -6.6f, -2.8f}, {6, 40, 3.15f, 5.4f},    {140, 174, 3.15f, 5.4f}, {238, 302, 3.15f, 5.4f}, {44, 76, 3.15f, 5.4f},
+                                      {104, 136, 3.15f, 5.4f},  {44, 76, -1.8f, 2.6f},   {104, 136, -1.8f, 2.6f}};
+  for (int i = 0; i < 13; ++i) out[M_S_ARMOR0 + i] = hullShell(shells[i][0], shells[i][1], shells[i][2], shells[i][3], 0.035f, g_info[M_S_ARMOR0 + i]);
+  // engine pod (built on its own axis; the part is placed at the pod's position)
+  out[M_S_NACELLE] = lathe({Vec3(3.15f, 0.56f, 0), Vec3(3.15f, 0.80f, 0), Vec3(3.6f, 0.855f, 0), Vec3(4.3f, 0.88f, 0), Vec3(5.2f, 0.875f, 0), Vec3(6.0f, 0.84f, 0), Vec3(6.7f, 0.78f, 0), Vec3(6.7f, 0.5f, 0)}, g_info[M_S_NACELLE]);
+  out[M_S_INTAKE] = lathe({Vec3(3.2f, 0.56f, 0), Vec3(2.7f, 0.585f, 0), Vec3(2.4f, 0.61f, 0), Vec3(2.27f, 0.635f, 0), Vec3(2.2f, 0.685f, 0), Vec3(2.25f, 0.735f, 0), Vec3(2.45f, 0.775f, 0), Vec3(2.8f, 0.795f, 0), Vec3(3.2f, 0.805f, 0)},
+                          g_info[M_S_INTAKE], 3.18f, 0.57f, -1.0f);
+  out[M_S_NOZZLE] = lathe({Vec3(6.62f, 0.60f, 0), Vec3(6.62f, 0.79f, 0), Vec3(6.9f, 0.80f, 0), Vec3(7.3f, 0.765f, 0), Vec3(7.7f, 0.69f, 0), Vec3(8.02f, 0.615f, 0), Vec3(8.06f, 0.585f, 0), Vec3(8.0f, 0.555f, 0),
+                           Vec3(7.7f, 0.50f, 0), Vec3(7.35f, 0.44f, 0), Vec3(7.1f, 0.46f, 0), Vec3(6.7f, 0.60f, 0)}, g_info[M_S_NOZZLE]);
+}
+
+} // namespace
+
+const ShipMeshInfo& shipMeshInfo(int mesh) {
+  if (!g_infoReady) { std::vector<MeshData> tmp; buildMeshes(tmp); }
+  return g_info[mesh];
+}
+
+namespace {
 } // namespace
 
 void buildMeshes(std::vector<MeshData>& out) {
@@ -341,6 +548,8 @@ void buildMeshes(std::vector<MeshData>& out) {
   out[M_FIN] = makeBlade(-0.5f, 0.5f, 0.12f, 0.5f, 0.5f, 0.3f, 2);
   out[M_NACELLE] = makeNacelle();
   out[M_NOZZLE] = makeNozzle();
+  buildShipMeshes(out);
+  g_infoReady = true;
   out[M_CRYSTAL] = makeCrystal();
   for (int i = 0; i < MESH_COUNT; ++i) g_meshRadius[i] = 0.5f;
   g_meshRadius[M_CRYSTAL] = 0.3f;

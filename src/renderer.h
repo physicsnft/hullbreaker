@@ -13,6 +13,7 @@ struct InstanceData {
   float model[16];
   float color[4];  // rgb, a = emissive strength
   float params[4]; // material, damage, seed, intensity
+  float local[4];  // xyz = the part's position on its ship, w = 1 to texture in ship space (seamless across parts)
 };
 struct ParticleData {
   float pos[3];

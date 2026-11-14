@@ -13,6 +13,8 @@ layout(location = 6) in vec3 vObj;
 layout(location = 7) flat in vec3 vAxX;
 layout(location = 8) flat in vec3 vAxY;
 layout(location = 9) flat in vec3 vAxZ;
+layout(location = 10) flat in vec4 vPart;
+layout(location = 11) flat in vec3 vScale;
 layout(location = 0) out vec4 outColor;
 
 const float PI = 3.14159265;
@@ -132,41 +134,42 @@ void main() {
     outColor = vec4(vColor.rgb * (fr * fr * 0.55 + 0.008) * pat * vParams.w, 1.0);
     return;
   }
-  if (mat == 7) { // ---- ion-plasma exhaust. Unit cone: base (+Z) sits on the nozzle, tip (-Z) is the tail.
-    float a = 0.5 - vObj.z;                       // 0 at the nozzle, 1 at the tail
-    float ang = atan(vObj.y, vObj.x);
-    float along = abs(dot(V, normalize(vAxZ)));   // 1 when looking straight down the jet
-    float sinv = max(sqrt(1.0 - along * along), 0.12);
-    float facing = clamp(abs(dot(N, V)) / sinv, 0.0, 1.0); // 1 on the jet's centre line from any angle
-    float depth = mix(1.0, 2.0, along * along);   // looking down the jet you see through its whole length
-    float throttle = vParams.w;
-    bool sheath = dmg > 0.5;                      // the outer, cooler envelope is drawn as a second cone
-    // turbulence carried down the jet
-    float flow = noise3(vec3(ang * 2.5 + seed * 7.0, a * 11.0 - time * 16.0, seed * 3.0)) * 0.6
-               + noise3(vec3(ang * 6.0, a * 30.0 - time * 34.0, seed * 5.0)) * 0.4;
-    float flick = 0.9 + 0.1 * sin(time * 63.0 + seed * 40.0) * sin(time * 17.0 + seed * 11.0);
-    vec3 hot = vec3(1.0, 0.98, 0.95);
-    vec3 ion = vColor.rgb;
-    vec3 tail = vColor.rgb * vec3(0.6, 0.35, 1.25) + vec3(0.08, 0.0, 0.16); // recombining plasma shifts to violet
-    vec3 c;
-    if (sheath) {
-      float body = exp(-a * 3.2) * (1.0 - a);
-      float inten = body * pow(facing, 0.6) * (0.35 + 0.9 * flow) * 0.5;
-      c = mix(ion, tail, smoothstep(0.1, 0.8, a)) * inten;
-    } else {
-      float core = pow(facing, 2.2);
-      float body = exp(-a * 2.6);
-      // standing shock diamonds: bright knots where the jet re-compresses, fading downstream
-      float knots = pow(0.5 + 0.5 * cos(a * 6.2832 * 5.5 - 0.5), 4.0) * exp(-a * 4.2) * smoothstep(0.0, 0.05, a);
-      float heat = clamp(core * body * 1.5 + knots * core * 1.6, 0.0, 1.0);
-      c = mix(ion, hot, heat);
-      c = mix(c, tail, smoothstep(0.3, 0.95, a));
-      float inten = body * (0.22 + 0.9 * core) + knots * core * 1.4;
-      inten *= 0.72 + 0.4 * flow;
-      c *= inten * 1.25;
+  if (mat == 7) { // ---- engine exhaust: a volume of glowing plasma, ray-marched inside its bounding cylinder
+    if (!gl_FrontFacing) discard;
+    vec3 centre = vWorld - (vAxX * vLocal.x + vAxY * vLocal.y + vAxZ * vLocal.z);
+    vec3 rel = G.camPos.xyz - centre;
+    vec3 ro = vec3(dot(rel, vAxX), dot(rel, vAxY), dot(rel, vAxZ)) / vScale; // camera and view ray in the cylinder's unit space
+    vec3 rd = vec3(dot(-V, vAxX), dot(-V, vAxY), dot(-V, vAxZ)) / vScale;
+    float qa = dot(rd.xy, rd.xy), qb = dot(ro.xy, rd.xy), qc = dot(ro.xy, ro.xy) - 0.25;
+    float tExit = 1e9;
+    if (qa > 1e-9) tExit = (-qb + sqrt(max(qb * qb - qa * qc, 0.0))) / qa;
+    if (abs(rd.z) > 1e-9) tExit = min(tExit, max((-0.5 - ro.z) / rd.z, (0.5 - ro.z) / rd.z));
+    float span = tExit - dist; // metres of plume along this ray
+    if (span <= 0.0) discard;
+    const int STEPS = 24;
+    float dt = span / float(STEPS);
+    float jitter = hash21(gl_FragCoord.xy + floor(time * 60.0) * 7.0);
+    float re = dmg; // nozzle exit radius as a fraction of the bound's radius
+    vec3 ion = vColor.rgb, hot = vec3(1.0, 0.97, 0.93), tail = ion * vec3(0.55, 0.4, 1.3) + vec3(0.06, 0.0, 0.14);
+    vec3 acc = vec3(0.0);
+    for (int i = 0; i < STEPS; ++i) {
+      vec3 q = ro + rd * (dist + (float(i) + jitter) * dt);
+      float a = q.z + 0.5;          // 0 at the nozzle, 1 at the tail
+      float r = length(q.xy) * 2.0; // 0 on the axis, 1 at the bound
+      // dense core, pinched and brightened at standing shock diamonds
+      float knots = pow(0.5 + 0.5 * cos(a * 6.2832 * 6.5 + 0.9), 3.0) * exp(-a * 5.0);
+      float rc = re * (0.62 - 0.4 * a) * (1.0 - 0.28 * knots);
+      float core = exp(-r * r / (rc * rc)) * exp(-a * 3.4) * (1.0 + 2.4 * knots);
+      // mantle: gas spreading into vacuum, thinning as it widens
+      float rm = re * (0.95 + 2.3 * a);
+      float turb = noise3(vec3(q.xy * 7.0 / rm, a * 13.0 - time * 17.0 + seed * 7.0));
+      float mantle = exp(-r * r / (rm * rm)) * exp(-a * 5.0) * (re * re / (rm * rm)) * 3.2 * (0.5 + turb);
+      float fade = smoothstep(0.0, 0.025, a) * smoothstep(1.0, 0.8, a) * smoothstep(1.0, 0.85, r);
+      acc += (mix(ion, hot, clamp(core, 0.0, 1.0)) * core * 1.6 + mix(ion, tail, smoothstep(0.05, 0.6, a)) * mantle * 0.6) * fade;
     }
-    c *= smoothstep(1.0, 0.8, a) * flick * throttle * depth;
-    outColor = vec4(c, 1.0);
+    float flick = 0.93 + 0.07 * sin(time * 63.0 + seed * 40.0) * sin(time * 17.0 + seed * 11.0);
+    vec3 lightOut = acc * dt * vParams.w * flick * 1.5;
+    outColor = vec4(1.0 - exp(-lightOut), 1.0); // soft shoulder: the core saturates to white instead of clipping
     return;
   }
   if (mat == 8) { // atmosphere-retention field across the bay door
@@ -181,6 +184,7 @@ void main() {
 
   vec3 albedo = vColor.rgb;
   vec3 emissive = vec3(0.0);
+  float selfLit = vColor.a;
   float metal = 0.0, rough = 0.6, F0d = 0.04, envOcc = 1.0;
 
   // planar texture coordinates and the matching tangent frame
@@ -195,24 +199,48 @@ void main() {
 
   vec3 nObj = normalize(vec3(dot(N, vAxX), dot(N, vAxY), dot(N, vAxZ)));
 
-  if (mat == 0) { // ---- hull: textured plating (panels, seams, rivets, scratches) over steel, with painted areas
-    Surf s = triplanar(vLocal / 6.0 + floor(seed * 8.0) * 0.37, nObj, 0.0, 1.0);
-    // paint: saturated colours are a coat over the metal, gone wherever the wear map says the surface is worn through
-    float mx = max(albedo.r, max(albedo.g, albedo.b)), mn = min(albedo.r, min(albedo.g, albedo.b));
-    float paint = smoothstep(0.22, 0.55, (mx - mn) / max(mx, 1e-3));
-    vec3 ao = abs(vObj);
-    float e2 = max(min(ao.x, ao.y), max(min(ao.y, ao.z), min(ao.x, ao.z)));
-    float edge = smoothstep(0.42, 0.5, e2) * lod; // exposed edges polish themselves bright
-    float chips = smoothstep(0.35, 0.6, s.wear + edge * 0.4);
-    paint *= 1.0 - chips;
-    vec3 steel = mix(vec3(dot(albedo, vec3(0.333))), albedo, 0.35) * 0.9 + 0.12;
-    vec3 base = mix(steel, albedo, paint) * s.albedo;
-    base = mix(base, base * 1.4 + 0.06, edge * 0.5);
-    metal = (1.0 - 0.85 * paint) * vParams.w;
-    rough = s.rough + 0.14 * paint - 0.1 * edge;
-    albedo = base;
+  if (mat == 0) { // ---- hull: satin paint over metal plating
+    // Parts that share the ship's axes are textured in ship space, so panel lines run unbroken from one part to the next.
+    vec3 tp = vPart.w > 0.5 ? (vLocal + vPart.xyz) / 6.0 : vLocal / 6.0 + floor(seed * 8.0) * 0.37;
+    Surf s = triplanar(tp, nObj, 0.0, 1.0);
+    Surf d = triplanar(tp * 3.3 + 0.31, nObj, 0.0, 0.6); // the same map again, finer: small panels, fasteners and lettering up close
+    float lum = dot(albedo, vec3(0.333));
+    float bare = smoothstep(0.13, 0.07, lum);                 // very dark parts are bare gunmetal
+    float worn = smoothstep(0.4, 0.7, max(s.wear, d.wear * 0.8)); // paint chipped through to the metal
+    float coat = (1.0 - bare) * (1.0 - worn);
+    vec3 under = mix(vec3(0.58, 0.58, 0.59), albedo * 2.4 + 0.1, bare);
+    albedo = mix(under, albedo, coat) * s.albedo * mix(vec3(1.0), d.albedo, 0.5) * mix(1.0, s.ao * d.ao, 0.55);
+    metal = mix(1.0, 0.1, coat) * vParams.w;
+    rough = mix(0.3 + 0.3 * s.rough, 0.22 + 0.62 * s.rough, coat) + (d.rough - 0.4) * 0.25;
+    N = TO_WORLD(normalize(s.n + (d.n - nObj)));
+    envOcc = s.ao * mix(1.0, d.ao, 0.6);
+    F0d = 0.05;
+  } else if (mat == 11) { // ---- engine intake or nozzle: heat-stained metal outside, soot and glow inside
+    float heat = vParams.w;                    // 1 for a nozzle, 0 for an intake
+    float zrel = vObj.z + 0.5;                 // 0 at the front, 1 at the exit
+    bool inner = dot(nObj.xy, vObj.xy) < -0.02;
+    float petal = abs(fract(atan(vObj.y, vObj.x) * 18.0 / 6.2832) - 0.5);
+    float seam = smoothstep(0.455, 0.5, petal) * smoothstep(0.2, 0.3, zrel) * heat; // overlapping nozzle petals
+    Surf s = triplanar(vLocal * 0.8 + seed, nObj, 3.0, 0.5);
+    vec3 base = mix(albedo * 1.5, vec3(0.34, 0.33, 0.32), heat) * s.albedo;
+    vec3 tint = mix(vec3(1.0), vec3(1.2, 0.95, 0.6), smoothstep(0.22, 0.48, zrel)); // titanium oxide colours: straw,
+    tint = mix(tint, vec3(0.8, 0.55, 0.95), smoothstep(0.5, 0.72, zrel));           // purple,
+    tint = mix(tint, vec3(0.42, 0.6, 1.1), smoothstep(0.72, 0.96, zrel));           // then blue at the hot end
+    base *= mix(vec3(1.0), tint, heat * 0.85) * (1.0 - 0.65 * seam);
+    metal = 1.0;
+    rough = 0.3 + 0.3 * s.rough;
     N = TO_WORLD(s.n);
     envOcc = s.ao;
+    if (inner) {
+      base *= mix(0.3, 0.1, heat);
+      metal = 0.3;
+      rough = 0.85;
+      envOcc = 0.12;
+      float deep = 1.0 - zrel, glow = vColor.a * heat;
+      emissive += (vec3(1.0, 0.42, 0.1) * (0.2 + deep) + vec3(0.65, 0.8, 1.0) * deep * deep * 1.6) * glow * 1.8;
+    }
+    albedo = base;
+    selfLit = 0.0;
   } else if (mat == 10) { // ---- station structure: plated, bolted, scuffed
     Surf s = triplanar(vLocal / 4.0 + floor(seed * 16.0) * 0.21, nObj, 3.0, 1.0);
     albedo *= s.albedo;
@@ -330,7 +358,7 @@ void main() {
   vec2 AB = vec2(-1.04, 1.04) * a004 + r4.zw;
   col += envColor(Rv, rough) * (F0 * AB.x + AB.y) * envOcc;
 
-  col += emissive + albedo * vColor.a;
+  col += emissive + albedo * selfLit;
   col = mix(G.fog.rgb, col, exp(-dist * G.fog.w));
   outColor = vec4(finalize(tonemap(col)), 1.0);
 }

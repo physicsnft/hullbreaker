@@ -270,9 +270,9 @@ class Game {
     if (mouse[1]) hangarOrbit -= mdx * 0.006f + dt * 0.09f;
     {
       Vec3 focus(0, 3.1f, 0);
-      Vec3 eye = focus + Vec3(std::sin(hangarOrbit) * 24.0f, 3.4f + 1.5f * std::sin(uiTime * 0.13f), std::cos(hangarOrbit) * 24.0f);
+      Vec3 eye = focus + Vec3(std::sin(hangarOrbit) * 24.0f, 3.4f + 1.5f * std::sin(uiTime * 0.13f), std::cos(hangarOrbit) * 24.0f) * opt.zoom;
       Quat look = lookRotation(focus - eye);
-      Vec3 shift = rotate(look, Vec3(1, 0, 0)) * 6.2f; // keeps the ship left of the loadout panel
+      Vec3 shift = rotate(look, Vec3(1, 0, 0)) * 6.2f * opt.zoom; // keeps the ship left of the loadout panel
       cam.pos = eye + shift;
       cam.rot = look;
       cam.fovY = radians(46);

@@ -1,7 +1,7 @@
 # Hullbreaker
 
 A Linux-native space combat game written in C++17 on Vulkan, in the spirit of Everspace.
-You fly one fighter built from about 128 individual parts. Every part has its own
+You fly one fighter built from about 100 individual parts. Every part has its own
 health and can be shot off, and the ship's performance is recomputed from whatever is
 still attached.
 
@@ -93,6 +93,12 @@ it plays: each sector's seed picks a key, mode, tempo, chord progressions and pa
 and the arrangement follows the fight, from a quiet pad and melody when nothing is near
 to bass, arpeggio and drums in combat. `--render-audio out.wav 60 --seed N` writes a
 piece to a WAV file.
+
+**Ship model.** The fuselage is one lofted body (cross-sections interpolated along its
+length) cut into five sections that can be shot away separately. Armour plates are shells
+that follow its surface. Intakes and nozzles are hollow surfaces of revolution, so you can
+see into them. The exhaust is ray-marched in the fragment shader as a volume of glowing
+gas with a dense core, shock diamonds and a spreading mantle.
 
 **Textures.** Four tileable surface sets (hull plating, rock, ice, station plating) are
 generated at start-up at 2048x2048 with full mip chains and sampled with anisotropic

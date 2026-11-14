@@ -607,7 +607,7 @@ void Renderer::createPipelines() {
 
   Desc mesh{mesh_vert_spv, sizeof(mesh_vert_spv), mesh_frag_spv, sizeof(mesh_frag_spv),
             {{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX}, {1, sizeof(InstanceData), VK_VERTEX_INPUT_RATE_INSTANCE}},
-            {{0, 0, V3, 0}, {1, 0, V3, 12}, {2, 1, V4, 0}, {3, 1, V4, 16}, {4, 1, V4, 32}, {5, 1, V4, 48}, {6, 1, V4, 64}, {7, 1, V4, 80}},
+            {{0, 0, V3, 0}, {1, 0, V3, 12}, {2, 1, V4, 0}, {3, 1, V4, 16}, {4, 1, V4, 32}, {5, 1, V4, 48}, {6, 1, V4, 64}, {7, 1, V4, 80}, {8, 1, V4, 96}},
             true, true, OPAQUE, VK_CULL_MODE_BACK_BIT};
   meshPipe_ = build(mesh);
   mesh.depthWrite = false;

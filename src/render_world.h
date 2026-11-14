@@ -31,6 +31,7 @@ struct Camera {
 
 void renderEnvironment(FrameData& fd, const Sector& s, const Camera& cam, float time, bool hangar);
 void renderHangar(FrameData& fd, const Ship& ship, const Ship* parked, float time);
-void renderShipModel(FrameData& fd, const Ship& ship, const Vec3& pos, const Quat& rot, float time);
+void renderShipModel(FrameData& fd, const Ship& ship, const Vec3& pos, const Quat& rot, float time, const float* engineOut = nullptr);
 void renderWorld(FrameData& fd, const World& w, const Camera& cam);
-void addInstance(FrameData& fd, bool additive, int mesh, const Mat4& m, Vec3 color, float emissive, int material, float damage, float seed, float intensity);
+void addInstance(FrameData& fd, bool additive, int mesh, const Mat4& m, Vec3 color, float emissive, int material, float damage, float seed, float intensity,
+                 Vec3 local = Vec3(), float useLocal = 0.0f);

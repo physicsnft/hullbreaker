@@ -21,6 +21,11 @@ enum MeshId {
   M_FIN,     // upright swept fin with an airfoil section; root at -Y
   M_NACELLE, // engine pod
   M_NOZZLE,  // bell nozzle, throat at -Z
+  // the fighter's own meshes, modelled in ship space (see shipMeshInfo)
+  M_S_NOSE, M_S_FWD, M_S_MID, M_S_AFT, M_S_TAIL, // fuselage sections, front to back
+  M_S_CANOPY, M_S_SILL, M_S_SPINE,
+  M_S_NACELLE, M_S_INTAKE, M_S_NOZZLE,
+  M_S_ARMOR0, M_S_ARMOR_LAST = M_S_ARMOR0 + 12,
   M_AST0, M_AST1, M_AST2, M_AST3, M_AST4, M_AST5,
   M_ASTLO0, M_ASTLO1, M_ASTLO2, M_ASTLO3, M_ASTLO4, M_ASTLO5,
   MESH_COUNT
@@ -38,7 +43,8 @@ enum Material {
   MAT_FLAME = 7,  // additive pass
   MAT_FIELD = 8,  // additive pass: force field across the hangar door
   MAT_CONTAINER = 9,
-  MAT_STRUCT = 10 // station walls, girders, machinery
+  MAT_STRUCT = 10, // station walls, girders, machinery
+  MAT_DUCT = 11    // inside and outside of engine intakes and nozzles; intensity = heat
 };
 
 struct Vertex {
@@ -51,3 +57,7 @@ struct MeshData {
 
 extern float g_meshRadius[MESH_COUNT]; // mean radius of the unit mesh (used for asteroid collision spheres)
 void buildMeshes(std::vector<MeshData>& out);
+
+// Where a ship-space mesh (M_S_*) sits on the ship: the centre and size of its bounding box.
+struct ShipMeshInfo { Vec3 center, size; };
+const ShipMeshInfo& shipMeshInfo(int mesh);

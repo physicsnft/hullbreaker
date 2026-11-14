@@ -7,6 +7,7 @@ layout(location = 4) in vec4 iM2;
 layout(location = 5) in vec4 iM3;
 layout(location = 6) in vec4 iColor;  // rgb, a = emissive strength
 layout(location = 7) in vec4 iParams; // x material, y damage, z seed, w intensity / metalness
+layout(location = 8) in vec4 iLocal;  // xyz part position on its ship, w = texture in ship space
 
 layout(location = 0) out vec3 vWorld;
 layout(location = 1) out vec3 vNormal;
@@ -18,6 +19,8 @@ layout(location = 6) out vec3 vObj;    // unit object space
 layout(location = 7) flat out vec3 vAxX; // world-space directions of the object's axes,
 layout(location = 8) flat out vec3 vAxY; // used as the tangent frame for surface detail
 layout(location = 9) flat out vec3 vAxZ;
+layout(location = 10) flat out vec4 vPart;
+layout(location = 11) flat out vec3 vScale;
 
 void main() {
   mat4 model = mat4(iM0, iM1, iM2, iM3);
@@ -33,5 +36,7 @@ void main() {
   vAxX = iM0.xyz / scale.x;
   vAxY = iM1.xyz / scale.y;
   vAxZ = iM2.xyz / scale.z;
+  vPart = iLocal;
+  vScale = scale;
   gl_Position = G.viewProj * w;
 }

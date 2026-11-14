@@ -19,6 +19,7 @@ struct GameOptions {
   int difficulty = 1;         // 0 rookie, 1 pilot, 2 veteran, 3 ace
   bool sound = true;
   int texSize = 2048;         // surface texture resolution: 512, 1024, 2048 or 4096
+  float zoom = 1;             // testing: hangar camera distance factor
   float camYaw = 0;           // testing: chase camera yaw offset in degrees
   float orbit = -1000;        // testing: fixed hangar camera angle in radians
 };

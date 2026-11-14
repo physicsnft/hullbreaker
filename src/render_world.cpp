@@ -17,11 +17,13 @@ void addGlow(FrameData& fd, const Vec3& pos, float size, const Vec3& c, const Ve
 }
 } // namespace
 
-void addInstance(FrameData& fd, bool additive, int mesh, const Mat4& m, Vec3 color, float emissive, int material, float damage, float seed, float intensity) {
+void addInstance(FrameData& fd, bool additive, int mesh, const Mat4& m, Vec3 color, float emissive, int material, float damage, float seed, float intensity,
+                 Vec3 local, float useLocal) {
   InstanceData d;
   std::memcpy(d.model, m.m, sizeof(d.model));
   d.color[0] = color.x; d.color[1] = color.y; d.color[2] = color.z; d.color[3] = emissive;
   d.params[0] = (float)material; d.params[1] = damage; d.params[2] = seed; d.params[3] = intensity;
+  d.local[0] = local.x; d.local[1] = local.y; d.local[2] = local.z; d.local[3] = useLocal;
   (additive ? fd.additive : fd.opaque)[mesh].push_back(d);
 }
 
@@ -339,15 +341,24 @@ void renderHangar(FrameData& fd, const Ship& ship, const Ship* parked, float tim
   }
 }
 
-void renderShipModel(FrameData& fd, const Ship& ship, const Vec3& pos, const Quat& rot, float time) {
+void renderShipModel(FrameData& fd, const Ship& ship, const Vec3& pos, const Quat& rot, float time, const float* engineOut) {
   for (const Part& p : ship.parts) {
     if (!p.alive || p.internal) continue;
     Mat4 m = fromTRS(pos + rotate(rot, p.pos), rot * p.rot, p.scale);
     Vec3 col = p.color;
-    float em = p.emissive;
+    float em = p.emissive, intensity = 1.0f;
     if (p.role == Role::Light) em *= std::fmod(time * 0.8f + p.seed, 1.0f) < 0.75f ? 1.0f : 0.05f;
+    float burn = engineOut && p.sys >= 0 ? clampf(engineOut[p.sys], 0.0f, 1.5f) : 0.0f;
+    if (p.material == MAT_DUCT) { // nozzles glow inside with the throttle; intakes stay cold
+      intensity = p.role == Role::EngineNozzle || p.role == Role::RCS ? 1.0f : 0.0f;
+      em = p.role == Role::EngineNozzle ? burn : 0.0f;
+    } else if (p.role == Role::EngineAux && p.material == MAT_EMISSIVE) {
+      em = 0.15f + 5.0f * burn; // injector plate at the back of the combustion chamber
+      col = lerpv(Vec3(1.0f, 0.5f, 0.2f), lerpv(col, Vec3(1, 1, 1), 0.5f), clampf(burn * 1.5f, 0.0f, 1.0f));
+    }
     if (p.flash > 0) { col = lerpv(col, Vec3(1.0f, 0.9f, 0.7f), 0.7f); em += 1.5f; }
-    addInstance(fd, false, p.mesh, m, col, em, p.material, 1.0f - p.hp / p.maxHp, p.seed, 1.0f);
+    bool aligned = std::fabs(p.rot.w) > 0.9999f; // unrotated parts share one texture space, so plating runs unbroken across them
+    addInstance(fd, false, p.mesh, m, col, em, p.material, 1.0f - p.hp / p.maxHp, p.seed, intensity, p.pos, aligned ? 1.0f : 0.0f);
   }
 }
 
@@ -364,7 +375,7 @@ void renderWorld(FrameData& fd, const World& w, const Camera& cam) {
   for (const ShipEntity& s : w.ships) {
     if (!s.alive) continue;
     if (!visible(s.pos, 14)) continue;
-    renderShipModel(fd, s.ship, s.pos, s.rot, w.time);
+    renderShipModel(fd, s.ship, s.pos, s.rot, w.time, s.engineOut);
     // exhaust plumes: additive cones, tip trailing aft
     for (int e = 0; e < 2; ++e) {
       float out = s.engineOut[e];
@@ -372,25 +383,13 @@ void renderWorld(FrameData& fd, const World& w, const Camera& cam) {
       float health = s.ship.stats.engine[e];
       float flick = health < 0.6f ? (0.55f + 0.45f * std::sin(w.time * 47.0f + e * 2.0f + s.id) * std::sin(w.time * 13.0f + e)) : 1.0f;
       float power = clampf(out, 0.0f, 1.5f);
-      float len = (2.5f + 11.0f * power) * flick;
-      float seed = (float)(s.id * 2 + e) * 0.37f;
-      Vec3 nozzle = s.ship.stats.enginePos[e] + Vec3(0, 0, 0.62f);
-      Quat aft = s.rot * axisAngle(Vec3(0, 1, 0), PI);
-      // hot core jet, then a wider, shorter, cooler envelope around it
-      addInstance(fd, true, M_CONE, fromTRS(s.pos + rotate(s.rot, nozzle + Vec3(0, 0, len * 0.5f)), aft, Vec3(1.15f, 1.15f, len)), s.ship.glow, 0,
-                  MAT_FLAME, 0.0f, seed, 0.55f + 0.75f * power);
-      float len2 = len * 0.62f;
-      addInstance(fd, true, M_CONE, fromTRS(s.pos + rotate(s.rot, nozzle + Vec3(0, 0, len2 * 0.5f)), aft, Vec3(2.1f, 2.1f, len2)), s.ship.glow, 0,
-                  MAT_FLAME, 1.0f, seed + 0.5f, 0.5f + 0.6f * power);
-      // the nozzle throat glows white-hot
-      addInstance(fd, false, M_SPHERE, fromTRS(s.pos + rotate(s.rot, nozzle + Vec3(0, 0, -0.25f)), s.rot, Vec3(1.3f, 1.3f, 0.5f)),
-                  lerpv(s.ship.glow, Vec3(1, 1, 1), 0.6f), 1.0f + 3.0f * power * flick, MAT_EMISSIVE, 0, 0, 1);
-      addGlow(fd, s.pos + rotate(s.rot, nozzle + Vec3(0, 0, 0.3f)), 2.0f + 2.6f * power, lerpv(s.ship.glow, Vec3(1, 1, 1), 0.35f) * (0.45f * power * flick));
-      addGlow(fd, s.pos + rotate(s.rot, nozzle + Vec3(0, 0, len * 0.3f)), 1.5f + 3.5f * power, s.ship.glow * (0.16f * power * flick));
-      // camera-facing streaks down the axis: the dense centre of the jet, visible from any side
-      Vec3 axis = rotate(s.rot, Vec3(0, 0, 1));
-      addGlow(fd, s.pos + rotate(s.rot, nozzle + Vec3(0, 0, len * 0.22f)), 0.30f, lerpv(s.ship.glow, Vec3(1, 1, 1), 0.7f) * (1.3f * power * flick), axis * (len * 0.42f), 2);
-      addGlow(fd, s.pos + rotate(s.rot, nozzle + Vec3(0, 0, len * 0.40f)), 0.75f, s.ship.glow * (0.45f * power * flick), axis * (len * 0.75f), 2);
+      // The exhaust is ray-marched inside this bounding cylinder, which starts at the nozzle's exit plane.
+      const float bound = 2.6f, exitRadius = 0.585f;
+      float len = 5.0f + 14.0f * power;
+      Vec3 exitPos = s.ship.stats.enginePos[e] + Vec3(0, 0, 0.74f);
+      addInstance(fd, true, M_CYL, fromTRS(s.pos + rotate(s.rot, exitPos + Vec3(0, 0, len * 0.5f)), s.rot, Vec3(bound * 2, bound * 2, len)), s.ship.glow, 0,
+                  MAT_FLAME, exitRadius / bound, (float)(s.id * 2 + e) * 0.37f, (0.35f + 0.75f * power) * flick);
+      addGlow(fd, s.pos + rotate(s.rot, exitPos + Vec3(0, 0, 0.2f)), 1.6f + 1.6f * power, lerpv(s.ship.glow, Vec3(1, 1, 1), 0.3f) * (0.22f * power * flick));
     }
     if (s.shieldFlash > 0.01f) {
       Mat4 m = fromTRS(s.pos + rotate(s.rot, Vec3(0, 0, -0.8f)), s.rot, Vec3(20.0f, 8.5f, 23.0f));

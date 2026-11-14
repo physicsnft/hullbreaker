@@ -80,6 +80,7 @@ int main(int argc, char** argv) {
     }
     else if (is("--orbit")) o.orbit = (float)std::atof(next());
     else if (is("--cam-yaw")) o.camYaw = (float)std::atof(next());
+    else if (is("--zoom")) o.zoom = (float)std::atof(next());
     else if (is("--render-audio")) {
       const char* path = next();
       float secs = i + 1 < argc ? (float)std::atof(argv[i + 1]) : 60.0f;
