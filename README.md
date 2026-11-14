@@ -1,7 +1,7 @@
 # Hullbreaker
 
 A Linux-native space combat game written in C++17 on Vulkan, in the spirit of Everspace.
-You fly one fighter built from about 100 individual parts. Every part has its own
+You fly one fighter built from more than 400 individual parts. Every part has its own
 health and can be shot off, and the ship's performance is recomputed from whatever is
 still attached.
 
@@ -66,6 +66,12 @@ recoil, hits push and spin the target, and collisions exchange momentum.
 part that takes damage. Parts form a structural tree: shoot off a wing root and the
 whole wing, with its weapon, tumbles away as debris.
 
+The hull is covered in separate skin plates (about 90 on the fuselage, 56 on the wings).
+A plate absorbs hits until it is blown off; what it could not absorb reaches the frame
+beneath, which is then exposed. Small fittings - antennas, sensor blisters, nozzle petals
+and their actuators, intake vanes, pipes, cooling rings, capacitors - are parts too and
+snap off individually.
+
 - Engines: thrust scales with the health of the nacelle, nozzle, intake and pylon.
   One dead engine halves acceleration and pulls the nose sideways; two leave you adrift.
 - Wings, fins and thrusters: each contributes to pitch, yaw or roll authority. Losing
@@ -95,8 +101,8 @@ to bass, arpeggio and drums in combat. `--render-audio out.wav 60 --seed N` writ
 piece to a WAV file.
 
 **Ship model.** The fuselage is one lofted body (cross-sections interpolated along its
-length) cut into five sections that can be shot away separately. Armour plates are shells
-that follow its surface. Intakes and nozzles are hollow surfaces of revolution, so you can
+length) cut into five sections that can be shot away separately. They form the frame; the
+painted skin is a grid of plates (12 bands by 8 sectors) shaped to follow its surface. Intakes and nozzles are hollow surfaces of revolution, so you can
 see into them. The exhaust is ray-marched in the fragment shader as a volume of glowing
 gas with a dense core, shock diamonds and a spreading mantle.
 
@@ -112,7 +118,9 @@ space, or the light bars and bay door in the hangar. The hull is brushed, worn m
 painted panels.
 
 **Weapons.** Light: pulse laser, Vulcan gatling, ion blaster. Heavy: railgun, plasma
-cannon, seeker missile. Pick two in the hangar.
+cannon, seeker missile. Pick two in the hangar. Each is an assembly of 20 to 30 parts
+(hollow barrels, muzzle brake, cooling rings or coils, capacitors, feeds, mounting lugs),
+and its condition is read from the ones that are left.
 
 ## Source layout
 

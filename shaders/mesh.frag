@@ -244,7 +244,7 @@ void main() {
   } else if (mat == 10) { // ---- station structure: plated, bolted, scuffed
     Surf s = triplanar(vLocal / 4.0 + floor(seed * 16.0) * 0.21, nObj, 3.0, 1.0);
     albedo *= s.albedo;
-    albedo *= 0.75 + 0.25 * smoothstep(0.0, 2.5, vWorld.y); // dirtier near the deck
+    if (G.ambient.w > 0.5) albedo *= 0.75 + 0.25 * smoothstep(0.0, 2.5, vWorld.y); // station walls are dirtier near the deck
     metal = vParams.w;
     rough = s.rough + 0.2 - 0.35 * metal;
     N = TO_WORLD(s.n);

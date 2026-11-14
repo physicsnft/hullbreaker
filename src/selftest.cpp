@@ -39,7 +39,7 @@ int runSelfTest() {
   const Ship& ship = w.player().ship;
   std::printf("    %d parts, %.1f t, inertia (%.0f, %.0f, %.0f) kg m2\n", (int)ship.parts.size(), ship.stats.mass / 1000,
               ship.stats.inertia.x, ship.stats.inertia.y, ship.stats.inertia.z);
-  check(ship.parts.size() >= 90, "ship is built from 90+ individual parts");
+  check(ship.parts.size() >= 350, "ship is built from 350+ individual parts");
   float t;
   int hit = ship.raycast(Vec3(5, 10, 2), Vec3(0, -1, 0), 20, t);
   check(hit >= 0 && ship.parts[hit].name.find("WING") != std::string::npos, "a shot from above the starboard wing hits a wing part");
@@ -103,8 +103,7 @@ int runSelfTest() {
   run(w, 4, fire);
   int shotsFull = w.player().shotsFired;
   fresh(w, W_GATLING, W_RAIL);
-  w.debugDestroy("VULCAN GATLING BARREL");
-  w.debugDestroy("VULCAN GATLING BARREL");
+  for (int i = 0; i < 3; ++i) w.debugDestroy("VULCAN GATLING BARREL");
   float cond = w.player().ship.stats.weapon[0];
   run(w, 4, fire);
   int shotsHalf = w.player().shotsFired;
@@ -112,7 +111,7 @@ int runSelfTest() {
   int before = w.player().shotsFired;
   run(w, 2, fire);
   int shotsDead = w.player().shotsFired - before;
-  std::printf("    4 s of fire: intact %d shots, two of four barrels gone %d shots (condition %.0f%%), housing gone %d shots\n", shotsFull,
+  std::printf("    4 s of fire: intact %d shots, three of six barrels gone %d shots (condition %.0f%%), housing gone %d shots\n", shotsFull,
               shotsHalf, cond * 100, shotsDead);
   check(shotsFull > 50, "an intact gatling fires rapidly");
   check(shotsHalf < shotsFull * 0.85f && shotsHalf > 5, "a damaged cannon still works, but fires slower and misfires");

@@ -419,10 +419,10 @@ MeshData hullShell(float a0deg, float a1deg, float z0, float z1, float thick, Sh
   SMesh m;
   const float a0 = radians(a0deg), a1 = radians(a1deg);
   const int na = std::max(4, (int)((a1deg - a0deg) / 4.0f)), nz = std::max(2, (int)((z1 - z0) / 0.16f));
-  const float bevel = 0.03f; // the plate's edges slope down to the hull
+  const float bevel = 0.012f; // the plate's edges slope down to the hull
   auto at = [&](int i, int k, float grow, float inset) {
     float ta = (float)i / na, tz = (float)k / nz;
-    float a = lerpf(a0 + inset * 0.03f, a1 - inset * 0.03f, ta), z = lerpf(z0 + inset * bevel, z1 - inset * bevel, tz);
+    float a = lerpf(a0 + inset * 0.012f, a1 - inset * 0.012f, ta), z = lerpf(z0 + inset * bevel, z1 - inset * bevel, tz);
     return secPoint(fuse(z), a, grow);
   };
   std::vector<uint32_t> top((size_t)(na + 1) * (nz + 1));
@@ -508,11 +508,24 @@ void buildShipMeshes(std::vector<MeshData>& out) {
     Sec s{z, std::max(lerpf(0.40f, 0.20f, t) * ends, 0.02f), std::max(lerpf(0.44f, 0.14f, t) * ends, 0.02f), 0.12f, f.yc + f.ht - 0.13f, 2.6f};
     return s;
   }, -2.5f, 6.1f, g_info[M_S_SPINE], 32, 0.2f);
-  // armour plates
-  static const float shells[13][4] = {{6, 40, -1.8f, 2.6f},   {140, 174, -1.8f, 2.6f}, {238, 302, -2.0f, 2.6f}, {-28, 28, -6.6f, -2.8f}, {152, 208, -6.6f, -2.8f},
-                                      {240, 300, -6.6f, -2.8f}, {6, 40, 3.15f, 5.4f},    {140, 174, 3.15f, 5.4f}, {238, 302, 3.15f, 5.4f}, {44, 76, 3.15f, 5.4f},
-                                      {104, 136, 3.15f, 5.4f},  {44, 76, -1.8f, 2.6f},   {104, 136, -1.8f, 2.6f}};
-  for (int i = 0; i < 13; ++i) out[M_S_ARMOR0 + i] = hullShell(shells[i][0], shells[i][1], shells[i][2], shells[i][3], 0.035f, g_info[M_S_ARMOR0 + i]);
+  // skin plates: the whole fuselage surface, cut into bands and sectors
+  for (int band = 0; band < SKIN_BANDS; ++band)
+    for (int sec = 0; sec < SKIN_SECTORS; ++sec) {
+      if (!skinPlateExists(band, sec)) continue;
+      float z0 = lerpf(-9.6f, 7.4f, (float)band / SKIN_BANDS), z1 = lerpf(-9.6f, 7.4f, (float)(band + 1) / SKIN_BANDS);
+      int id = M_S_ARMOR0 + band * SKIN_SECTORS + sec;
+      out[id] = hullShell(-22.5f + 45.0f * sec + 0.35f, 22.5f + 45.0f * sec - 0.35f, z0 + 0.008f, z1 - 0.008f, 0.035f, g_info[id]);
+    }
+  // weapon and fitting shapes (unit meshes; the bounding boxes are not needed)
+  ShipMeshInfo unused;
+  out[M_TUBE] = lathe({Vec3(0.45f, 0.36f, 0), Vec3(-0.5f, 0.36f, 0), Vec3(-0.5f, 0.5f, 0), Vec3(0.5f, 0.5f, 0), Vec3(0.5f, 0.02f, 0)}, unused, 0.45f, 0.36f, -1.0f, 24);
+  out[M_MUZZLE] = lathe({Vec3(0.5f, 0.30f, 0), Vec3(-0.5f, 0.38f, 0), Vec3(-0.5f, 0.5f, 0), Vec3(-0.2f, 0.5f, 0), Vec3(0.1f, 0.42f, 0), Vec3(0.5f, 0.40f, 0), Vec3(0.5f, 0.30f, 0)}, unused, 1e9f, 0, 0, 24);
+  {
+    std::vector<Vec3> ring;
+    for (int i = 0; i <= 12; ++i) { float t = -2 * PI * i / 12; ring.push_back(Vec3(0.5f * std::cos(t), 0.43f + 0.07f * std::sin(t), 0)); }
+    out[M_RING] = lathe(ring, unused, 1e9f, 0, 0, 32);
+  }
+  out[M_POD] = lathe({Vec3(-0.5f, 0.02f, 0), Vec3(-0.44f, 0.2f, 0), Vec3(-0.34f, 0.35f, 0), Vec3(-0.18f, 0.46f, 0), Vec3(0.02f, 0.5f, 0), Vec3(0.24f, 0.48f, 0), Vec3(0.4f, 0.4f, 0), Vec3(0.5f, 0.27f, 0), Vec3(0.5f, 0.02f, 0)}, unused, 1e9f, 0, 0, 24);
   // engine pod (built on its own axis; the part is placed at the pod's position)
   out[M_S_NACELLE] = lathe({Vec3(3.15f, 0.56f, 0), Vec3(3.15f, 0.80f, 0), Vec3(3.6f, 0.855f, 0), Vec3(4.3f, 0.88f, 0), Vec3(5.2f, 0.875f, 0), Vec3(6.0f, 0.84f, 0), Vec3(6.7f, 0.78f, 0), Vec3(6.7f, 0.5f, 0)}, g_info[M_S_NACELLE]);
   out[M_S_INTAKE] = lathe({Vec3(3.2f, 0.56f, 0), Vec3(2.7f, 0.585f, 0), Vec3(2.4f, 0.61f, 0), Vec3(2.27f, 0.635f, 0), Vec3(2.2f, 0.685f, 0), Vec3(2.25f, 0.735f, 0), Vec3(2.45f, 0.775f, 0), Vec3(2.8f, 0.795f, 0), Vec3(3.2f, 0.805f, 0)},
@@ -522,6 +535,12 @@ void buildShipMeshes(std::vector<MeshData>& out) {
 }
 
 } // namespace
+
+bool skinPlateExists(int band, int sector) {
+  float z0 = lerpf(-9.6f, 7.4f, (float)band / SKIN_BANDS), z1 = lerpf(-9.6f, 7.4f, (float)(band + 1) / SKIN_BANDS);
+  if (sector == 2 && z1 > -5.8f && z0 < -2.2f) return false; // the canopy sits here
+  return true;
+}
 
 const ShipMeshInfo& shipMeshInfo(int mesh) {
   if (!g_infoReady) { std::vector<MeshData> tmp; buildMeshes(tmp); }

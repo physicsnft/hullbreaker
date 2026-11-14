@@ -355,8 +355,16 @@ void World::destroyPart(ShipEntity& s, int idx, Vec3 dirWorld) {
   root.hp = 0;
 
   float size = std::max(0.5f, std::cbrt(root.scale.x * root.scale.y * root.scale.z));
-  fxExplosion(wp, s.vel, std::min(size, 2.4f));
-  sound(SFX_PART_LOST, wp, clampf(size * 0.45f, 0.35f, 1.2f), s.id);
+  bool minor = (root.role == Role::Detail || root.role == Role::Skin || root.role == Role::Light) && sub.size() < 4;
+  if (minor) { // small fittings and skin plates snap off with a flash and sparks, not a fireball
+    emit(wp, s.vel, 0.12f, size * 1.2f, size * 2.4f, Vec3(1.0f, 0.8f, 0.5f) * 1.2f, 0, Vec3(0), 0, 0);
+    fxSparks(wp, s.vel, outward, Vec3(1.0f, 0.75f, 0.4f), 10, 26.0f);
+    if (rng.chance(0.5f)) fxSmoke(wp, s.vel, 0.6f);
+    sound(SFX_HULL_HIT, wp, 0.7f, s.id);
+  } else {
+    fxExplosion(wp, s.vel, std::min(size, 2.4f));
+    sound(SFX_PART_LOST, wp, clampf(size * 0.45f, 0.35f, 1.2f), s.id);
+  }
   if (!root.internal && rng.chance(0.7f)) spawnDebris(s, {idx}, outward, rng.range(8, 20));
   if (sub.size() > 1) {
     std::vector<int> rest(sub.begin() + 1, sub.end());
@@ -367,8 +375,8 @@ void World::destroyPart(ShipEntity& s, int idx, Vec3 dirWorld) {
   s.ship.recompute();
   const ShipStats& st = s.ship.stats;
   if (s.player) {
-    shake = std::max(shake, 0.6f);
-    if (root.role != Role::Detail && root.role != Role::Light) say("LOST: " + root.name, kRed);
+    shake = std::max(shake, minor ? 0.25f : 0.6f);
+    if (!minor && (root.maxHp >= 14 || sub.size() >= 3)) say("LOST: " + root.name, kRed); // small fittings go without comment
     for (int e = 0; e < 2; ++e) {
       if (old.engine[e] > 0 && st.engine[e] <= 0) say(std::string(sideName(e)) + " ENGINE OFFLINE", kRed, 7);
       if (old.weapon[e] > 0 && st.weapon[e] <= 0) say(std::string("WEAPON ") + (e ? "2" : "1") + " OFFLINE: " + WEAPONS[s.ship.weapon[e]].name, kRed, 7);
@@ -401,8 +409,15 @@ void World::damagePart(ShipEntity& s, int idx, float dmg, Vec3 dirWorld, bool bl
         }
       }
   }
-  if (p.hp <= 0) destroyPart(s, idx, dirWorld);
-  else s.ship.recompute();
+  if (p.hp <= 0) {
+    // skin gives way: whatever it could not absorb reaches the structure it was covering
+    float carry = p.role == Role::Skin ? -p.hp * 0.85f : 0.0f;
+    int under = p.parent;
+    destroyPart(s, idx, dirWorld);
+    if (carry > 0 && under >= 0 && s.alive) damagePart(s, under, carry, dirWorld, bleed);
+  } else {
+    s.ship.recompute();
+  }
 }
 
 void World::applyHit(ShipEntity& s, int part, Vec3 hitLocal, const WeaponDef& w, float dmgScale, Vec3 dirWorld) {

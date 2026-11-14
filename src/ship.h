@@ -12,7 +12,8 @@ enum class Role : uint8_t {
   Wing, Control, Fin, RCS,
   EnginePylon, EngineCore, EngineNozzle, EngineAux,
   CannonMount, CannonBody, CannonBarrel, CannonAux,
-  Light, Detail
+  Light, Detail,
+  Skin // outer plating: takes hits first, passes what it cannot absorb to the structure beneath
 };
 
 struct Part {

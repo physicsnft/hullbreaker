@@ -353,8 +353,8 @@ void renderShipModel(FrameData& fd, const Ship& ship, const Vec3& pos, const Qua
       intensity = p.role == Role::EngineNozzle || p.role == Role::RCS ? 1.0f : 0.0f;
       em = p.role == Role::EngineNozzle ? burn : 0.0f;
     } else if (p.role == Role::EngineAux && p.material == MAT_EMISSIVE) {
-      em = 0.15f + 5.0f * burn; // injector plate at the back of the combustion chamber
-      col = lerpv(Vec3(1.0f, 0.5f, 0.2f), lerpv(col, Vec3(1, 1, 1), 0.5f), clampf(burn * 1.5f, 0.0f, 1.0f));
+      em = 1.0f + 5.0f * burn; // injector plate at the back of the combustion chamber: dark metal until the engine lights
+      col = lerpv(Vec3(0.03f, 0.027f, 0.025f), lerpv(Vec3(1.0f, 0.5f, 0.2f), lerpv(col, Vec3(1, 1, 1), 0.5f), clampf(burn * 1.5f, 0.0f, 1.0f)), clampf(burn * 6.0f, 0.0f, 1.0f));
     }
     if (p.flash > 0) { col = lerpv(col, Vec3(1.0f, 0.9f, 0.7f), 0.7f); em += 1.5f; }
     bool aligned = std::fabs(p.rot.w) > 0.9999f; // unrotated parts share one texture space, so plating runs unbroken across them

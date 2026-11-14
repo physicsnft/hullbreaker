@@ -20,6 +20,7 @@ struct GameOptions {
   bool sound = true;
   int texSize = 2048;         // surface texture resolution: 512, 1024, 2048 or 4096
   float zoom = 1;             // testing: hangar camera distance factor
+  float focus[3] = {0, 0, 0}; // testing: where the hangar camera looks, relative to the ship
   float camYaw = 0;           // testing: chase camera yaw offset in degrees
   float orbit = -1000;        // testing: fixed hangar camera angle in radians
 };

@@ -80,6 +80,7 @@ int main(int argc, char** argv) {
     }
     else if (is("--orbit")) o.orbit = (float)std::atof(next());
     else if (is("--cam-yaw")) o.camYaw = (float)std::atof(next());
+    else if (is("--focus")) std::sscanf(next(), "%f,%f,%f", &o.focus[0], &o.focus[1], &o.focus[2]);
     else if (is("--zoom")) o.zoom = (float)std::atof(next());
     else if (is("--render-audio")) {
       const char* path = next();

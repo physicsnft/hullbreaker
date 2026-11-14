@@ -25,7 +25,11 @@ enum MeshId {
   M_S_NOSE, M_S_FWD, M_S_MID, M_S_AFT, M_S_TAIL, // fuselage sections, front to back
   M_S_CANOPY, M_S_SILL, M_S_SPINE,
   M_S_NACELLE, M_S_INTAKE, M_S_NOZZLE,
-  M_S_ARMOR0, M_S_ARMOR_LAST = M_S_ARMOR0 + 12,
+  M_TUBE,    // hollow barrel, open at -Z
+  M_MUZZLE,  // flared, hollow muzzle brake
+  M_RING,    // band with a rounded section (clamps, coils, cooling rings)
+  M_POD,     // streamlined pod, pointed at both ends
+  M_S_ARMOR0, M_S_ARMOR_LAST = M_S_ARMOR0 + 95, // fuselage skin plates: band * 8 + sector
   M_AST0, M_AST1, M_AST2, M_AST3, M_AST4, M_AST5,
   M_ASTLO0, M_ASTLO1, M_ASTLO2, M_ASTLO3, M_ASTLO4, M_ASTLO5,
   MESH_COUNT
@@ -61,3 +65,7 @@ void buildMeshes(std::vector<MeshData>& out);
 // Where a ship-space mesh (M_S_*) sits on the ship: the centre and size of its bounding box.
 struct ShipMeshInfo { Vec3 center, size; };
 const ShipMeshInfo& shipMeshInfo(int mesh);
+
+// The fuselage skin is cut into plates: SKIN_BANDS along the length, SKIN_SECTORS around it.
+const int SKIN_BANDS = 12, SKIN_SECTORS = 8;
+bool skinPlateExists(int band, int sector);
