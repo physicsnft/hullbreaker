@@ -75,6 +75,12 @@ whole wing, with its weapon, tumbles away as debris.
 - Sensors, shield generator, reactor and canopy each have their own effect.
 - The ship is lost when the cockpit, reactor or keel goes, or half its structure is gone.
 
+**Asteroids.** Every rock, ice crystal and wreck can be shot apart. Strength grows with
+size; when it runs out the body splits into two to four fragments that share its mass
+(about 12% is lost as dust), part across the line of the shot, and together keep the
+parent's momentum and spin. Fragments can be broken again until only dust is left, and
+they are solid: flying into one hurts.
+
 **Sectors.** Each game generates one of six environments from a seed: asteroid belt,
 nebula, planetary orbit, stellar corona, ice field or ship graveyard, with 2 to 6 enemy
 ships carrying random loadouts and pilot skill.
@@ -88,6 +94,12 @@ and the arrangement follows the fight, from a quiet pad and melody when nothing 
 to bass, arpeggio and drums in combat. `--render-audio out.wav 60 --seed N` writes a
 piece to a WAV file.
 
+**Textures.** Four tileable surface sets (hull plating, rock, ice, station plating) are
+generated at start-up at 2048x2048 with full mip chains and sampled with anisotropic
+filtering. Each set has colour, roughness, normal, occlusion and wear maps. They are
+applied by triplanar projection, so no mesh needs texture coordinates. `--texsize N`
+changes the resolution (512 to 4096); `--dump-textures DIR` writes the maps out as images.
+
 **Shading.** Lit surfaces use a physically based model (GGX specular, Fresnel) with two
 lights and an analytic reflection of the surroundings: the star, nebula and planets in
 space, or the light bars and bay door in the hangar. The hull is brushed, worn metal with
@@ -99,11 +111,12 @@ cannon, seeker missile. Pick two in the hangar.
 ## Source layout
 
     src/renderer.*      Vulkan renderer (sky, instanced meshes, particles, UI)
-    src/meshes.*        procedural meshes
+    src/meshes.*        procedural meshes (lofted hull sections, airfoil wings, asteroids)
     src/ship.*          the part-based ship and its derived flight stats
     src/world.*         sectors, physics, weapons, damage, AI
     src/render_world.*  simulation state -> draw lists
     src/game.cpp        menus, hangar, camera, HUD
+    src/textures.*      procedural texture maps
     src/audio.*         sound-effect synthesis, generative music, mixer
     src/selftest.cpp    headless checks
     third_party/        miniaudio.h (public domain / MIT-0)

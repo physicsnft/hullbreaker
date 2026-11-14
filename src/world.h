@@ -63,7 +63,7 @@ struct Asteroid {
   Vec3 angVel;
   int mesh = M_AST0, meshLo = M_ASTLO0;
   Vec3 scale{1, 1, 1};
-  float radius = 1, mass = 1, hp = 1;
+  float radius = 1, mass = 1, hp = 1, maxHp = 1;
   Vec3 color;
   int material = MAT_ROCK;
   float seed = 0, damage = 0;
@@ -187,6 +187,7 @@ class World {
   const ShipEntity& player() const { return ships[0]; }
   void cycleTarget(int dir);
   void targetNearest();
+  bool debugHitAsteroid(size_t idx, float dmg, Vec3 dir); // testing: shoot an asteroid
   bool debugDestroy(const std::string& partName); // testing: blow a named part off the player's ship
   void say(const std::string& text, Vec3 color = Vec3(0.5f, 0.9f, 1.0f), float ttl = 5.0f);
 
@@ -205,6 +206,7 @@ class World {
   void destroyPart(ShipEntity& s, int idx, Vec3 dirWorld);
   void explodeShip(ShipEntity& s);
   void damageAsteroid(size_t idx, float dmg, Vec3 hitPos, Vec3 dir);
+  void fractureAsteroid(size_t idx, Vec3 dir, float overkill);
   void spawnDebris(const ShipEntity& s, const std::vector<int>& idx, Vec3 impulseDir, float speed);
   // effects
   void emit(Vec3 pos, Vec3 vel, float life, float s0, float s1, Vec3 c0, float a0, Vec3 c1, float a1, int kind, float stretch = 0, float drag = 0);

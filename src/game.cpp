@@ -812,8 +812,10 @@ class Game {
 
     RendererOptions ro;
     ro.vsync = opt.vsync; ro.msaa = opt.msaa; ro.validation = opt.validation;
+    ro.textureSize = opt.texSize;
     if (!renderer.init(win, ro)) return 1;
     std::printf("Hullbreaker: %s, %dx%d, MSAA x%d\n", renderer.gpuName().c_str(), renderer.width(), renderer.height(), renderer.samples());
+    std::printf("Textures: 4 surface sets at %dx%d, generated in %.1f s\n", renderer.textureSize(), renderer.textureSize(), renderer.textureSeconds());
 
     loadout[0] = opt.weapon[0]; loadout[1] = opt.weapon[1];
     difficulty = opt.difficulty < 0 ? 0 : (opt.difficulty >= DIFFICULTY_COUNT ? DIFFICULTY_COUNT - 1 : opt.difficulty);

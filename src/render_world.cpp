@@ -414,7 +414,7 @@ void renderWorld(FrameData& fd, const World& w, const Camera& cam) {
     float fade = clampf(d.life / 3.0f, 0.0f, 1.0f);
     for (const DebrisPiece& p : d.pieces) {
       Mat4 m = fromTRS(d.pos + rotate(d.rot, p.pos), d.rot * p.rot, p.scale * fade);
-      addInstance(fd, false, p.mesh, m, p.color, p.emissive, p.material, std::max(p.damage, 0.55f), p.seed, 1.0f);
+      addInstance(fd, false, p.mesh, m, p.color, p.emissive, p.material, p.damage, p.seed, 1.0f);
     }
   }
 

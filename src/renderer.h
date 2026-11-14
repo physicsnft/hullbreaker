@@ -55,6 +55,7 @@ struct RendererOptions {
   bool vsync = true;
   int msaa = 4;
   bool validation = false;
+  int textureSize = 2048;
 };
 
 class Renderer {
@@ -67,6 +68,8 @@ class Renderer {
   int height() const { return (int)extent_.height; }
   const std::string& gpuName() const { return gpuName_; }
   int samples() const { return (int)samples_; }
+  int textureSize() const { return texSize_; }
+  double textureSeconds() const { return texSeconds_; }
 
  private:
   struct MeshRange { uint32_t firstIndex, indexCount; int32_t vertexOffset; };
@@ -84,6 +87,7 @@ class Renderer {
   void createDescriptors();
   void createPipelines();
   void createMeshBuffers();
+  void createTextures();
   void createFrameResources();
   uint32_t findMemoryType(uint32_t bits, VkMemoryPropertyFlags props);
   Buffer createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags props, bool map);
@@ -125,6 +129,10 @@ class Renderer {
              particlePipe_ = VK_NULL_HANDLE, uiPipe_ = VK_NULL_HANDLE;
 
   Buffer meshVB_, meshIB_;
+  Image tex_[2]; // surface texture arrays A (colour, roughness) and B (normal, occlusion, wear)
+  VkSampler sampler_ = VK_NULL_HANDLE;
+  bool aniso_ = false;
+  float maxAniso_ = 1;
   MeshRange meshRanges_[MESH_COUNT]{};
 
   VkCommandPool cmdPool_ = VK_NULL_HANDLE;
@@ -136,6 +144,8 @@ class Renderer {
     VkDescriptorSet set = VK_NULL_HANDLE;
   } frames_[kFrames];
   int frame_ = 0;
+  int texSize_ = 0;
+  double texSeconds_ = 0;
   bool resized_ = false;
 
   // per-draw scratch

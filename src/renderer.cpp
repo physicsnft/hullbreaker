@@ -1,9 +1,11 @@
 #include "renderer.h"
+#include "textures.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -48,6 +50,7 @@ bool Renderer::init(GLFWwindow* window, const RendererOptions& opts) {
     createDescriptors();
     createPipelines();
     createMeshBuffers();
+    createTextures();
     createFrameResources();
   } catch (const std::exception& e) {
     std::fprintf(stderr, "Renderer init failed: %s\n", e.what());
@@ -199,7 +202,13 @@ void Renderer::createDevice() {
     qcis.push_back(q);
   }
   const char* exts[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-  VkPhysicalDeviceFeatures feats{};
+  VkPhysicalDeviceFeatures supported, feats{};
+  vkGetPhysicalDeviceFeatures(phys_, &supported);
+  VkPhysicalDeviceProperties props;
+  vkGetPhysicalDeviceProperties(phys_, &props);
+  aniso_ = supported.samplerAnisotropy == VK_TRUE;
+  feats.samplerAnisotropy = supported.samplerAnisotropy;
+  maxAniso_ = std::min(16.0f, props.limits.maxSamplerAnisotropy);
   VkDeviceCreateInfo ci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
   ci.queueCreateInfoCount = (uint32_t)qcis.size();
   ci.pQueueCreateInfos = qcis.data();
@@ -475,14 +484,20 @@ void Renderer::createFramebuffers() {
 }
 
 void Renderer::createDescriptors() {
-  VkDescriptorSetLayoutBinding b{};
-  b.binding = 0;
-  b.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-  b.descriptorCount = 1;
-  b.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+  VkDescriptorSetLayoutBinding b[3]{};
+  b[0].binding = 0;
+  b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  b[0].descriptorCount = 1;
+  b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+  for (int i = 1; i < 3; ++i) {
+    b[i].binding = (uint32_t)i;
+    b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b[i].descriptorCount = 1;
+    b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  }
   VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-  li.bindingCount = 1;
-  li.pBindings = &b;
+  li.bindingCount = 3;
+  li.pBindings = b;
   check(vkCreateDescriptorSetLayout(dev_, &li, nullptr, &setLayout_), "descriptor set layout");
 
   VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -490,11 +505,11 @@ void Renderer::createDescriptors() {
   pl.pSetLayouts = &setLayout_;
   check(vkCreatePipelineLayout(dev_, &pl, nullptr, &pipeLayout_), "pipeline layout");
 
-  VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kFrames};
+  VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kFrames}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kFrames * 2}};
   VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
   pi.maxSets = kFrames;
-  pi.poolSizeCount = 1;
-  pi.pPoolSizes = &ps;
+  pi.poolSizeCount = 2;
+  pi.pPoolSizes = ps;
   check(vkCreateDescriptorPool(dev_, &pi, nullptr, &descPool_), "descriptor pool");
 }
 
@@ -655,6 +670,99 @@ void Renderer::createMeshBuffers() {
   destroyBuffer(stageI);
 }
 
+// Generate the surface textures and upload them, with full mip chains, as two 2D array images.
+void Renderer::createTextures() {
+  auto t0 = std::chrono::steady_clock::now();
+  TextureSet ts;
+  buildTextures(opts_.textureSize, ts);
+  texSize_ = ts.size;
+  const VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+  for (int t = 0; t < 2; ++t) {
+    const auto& mips = t == 0 ? ts.mipsA : ts.mipsB;
+    VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ii.imageType = VK_IMAGE_TYPE_2D;
+    ii.format = VK_FORMAT_R8G8B8A8_UNORM;
+    ii.extent = {(uint32_t)ts.size, (uint32_t)ts.size, 1};
+    ii.mipLevels = (uint32_t)ts.mipCount;
+    ii.arrayLayers = (uint32_t)ts.layers;
+    ii.samples = VK_SAMPLE_COUNT_1_BIT;
+    ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ii.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    ii.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    check(vkCreateImage(dev_, &ii, nullptr, &tex_[t].img), "vkCreateImage(texture)");
+    VkMemoryRequirements mr;
+    vkGetImageMemoryRequirements(dev_, tex_[t].img, &mr);
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex = findMemoryType(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    check(vkAllocateMemory(dev_, &ai, nullptr, &tex_[t].mem), "vkAllocateMemory(texture)");
+    check(vkBindImageMemory(dev_, tex_[t].img, tex_[t].mem, 0), "vkBindImageMemory(texture)");
+    VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vi.image = tex_[t].img;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    vi.format = ii.format;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ii.mipLevels, 0, ii.arrayLayers};
+    check(vkCreateImageView(dev_, &vi, nullptr, &tex_[t].view), "vkCreateImageView(texture)");
+
+    VkDeviceSize total = 0;
+    for (auto& m : mips) total += m.size();
+    Buffer stage = createBuffer(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, host, true);
+    std::vector<VkBufferImageCopy> regions;
+    VkDeviceSize off = 0;
+    for (int m = 0; m < ts.mipCount; ++m) {
+      std::memcpy((char*)stage.map + off, mips[(size_t)m].data(), mips[(size_t)m].size());
+      VkBufferImageCopy r{};
+      r.bufferOffset = off;
+      r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, (uint32_t)m, 0, ii.arrayLayers};
+      r.imageExtent = {(uint32_t)std::max(1, ts.size >> m), (uint32_t)std::max(1, ts.size >> m), 1};
+      regions.push_back(r);
+      off += mips[(size_t)m].size();
+    }
+    VkCommandBufferAllocateInfo ca{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    ca.commandPool = cmdPool_;
+    ca.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ca.commandBufferCount = 1;
+    VkCommandBuffer cmd;
+    check(vkAllocateCommandBuffers(dev_, &ca, &cmd), "alloc texture cmd");
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &bi);
+    VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    bar.srcQueueFamilyIndex = bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bar.image = tex_[t].img;
+    bar.subresourceRange = vi.subresourceRange;
+    bar.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    bar.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    bar.srcAccessMask = 0;
+    bar.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &bar);
+    vkCmdCopyBufferToImage(cmd, stage.buf, tex_[t].img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, (uint32_t)regions.size(), regions.data());
+    bar.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    bar.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    bar.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    bar.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &bar);
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd;
+    check(vkQueueSubmit(gfxQueue_, 1, &si, VK_NULL_HANDLE), "texture upload submit");
+    vkQueueWaitIdle(gfxQueue_);
+    vkFreeCommandBuffers(dev_, cmdPool_, 1, &cmd);
+    destroyBuffer(stage);
+  }
+  VkSamplerCreateInfo sc{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+  sc.magFilter = sc.minFilter = VK_FILTER_LINEAR;
+  sc.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+  sc.addressModeU = sc.addressModeV = sc.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  sc.anisotropyEnable = aniso_ ? VK_TRUE : VK_FALSE;
+  sc.maxAnisotropy = aniso_ ? maxAniso_ : 1.0f;
+  sc.maxLod = (float)ts.mipCount;
+  check(vkCreateSampler(dev_, &sc, nullptr, &sampler_), "vkCreateSampler");
+  texSeconds_ = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+}
+
 void Renderer::createFrameResources() {
   const VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
   for (auto& f : frames_) {
@@ -686,7 +794,15 @@ void Renderer::createFrameResources() {
     w.descriptorCount = 1;
     w.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     w.pBufferInfo = &bi;
-    vkUpdateDescriptorSets(dev_, 1, &w, 0, nullptr);
+    VkDescriptorImageInfo ii[2] = {{sampler_, tex_[0].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}, {sampler_, tex_[1].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+    VkWriteDescriptorSet ws[3] = {w, w, w};
+    for (int i = 0; i < 2; ++i) {
+      ws[i + 1].dstBinding = (uint32_t)(i + 1);
+      ws[i + 1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+      ws[i + 1].pBufferInfo = nullptr;
+      ws[i + 1].pImageInfo = &ii[i];
+    }
+    vkUpdateDescriptorSets(dev_, 3, ws, 0, nullptr);
   }
 }
 
@@ -818,6 +934,9 @@ void Renderer::shutdown() {
     }
     destroyBuffer(meshVB_);
     destroyBuffer(meshIB_);
+    if (sampler_) vkDestroySampler(dev_, sampler_, nullptr);
+    destroyImage(tex_[0]);
+    destroyImage(tex_[1]);
     for (VkPipeline p : {skyPipe_, meshPipe_, addPipe_, particlePipe_, uiPipe_})
       if (p) vkDestroyPipeline(dev_, p, nullptr);
     if (descPool_) vkDestroyDescriptorPool(dev_, descPool_, nullptr);

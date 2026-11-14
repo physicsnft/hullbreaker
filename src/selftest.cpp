@@ -123,6 +123,44 @@ int runSelfTest() {
   w.debugDestroy("COCKPIT");
   check(!w.player().alive, "losing a critical part destroys the ship");
 
+  std::printf("Asteroids\n");
+  {
+    World a;
+    a.generate(7, SEC_BELT, W_PULSE, W_RAIL, false);
+    size_t pick = 0;
+    for (size_t i = 0; i < a.asteroids.size(); ++i)
+      if (a.asteroids[i].radius > 18 && a.asteroids[i].radius < 30) { pick = i; break; }
+    Asteroid& big = a.asteroids[pick];
+    big.vel = Vec3(3, -2, 5);
+    big.angVel = Vec3(0, 0, 0);
+    const float M = big.mass, R = big.radius, hp = big.hp;
+    const Vec3 V = big.vel;
+    size_t before = a.asteroids.size();
+    a.debugHitAsteroid(pick, hp * 0.4f, Vec3(0, 0, -1));
+    bool survives = a.asteroids[pick].alive && a.asteroids.size() == before;
+    a.debugHitAsteroid(pick, hp, Vec3(0, 0, -1));
+    float m = 0, biggest = 0;
+    Vec3 mom;
+    int n = 0;
+    for (size_t i = before; i < a.asteroids.size(); ++i) {
+      m += a.asteroids[i].mass; mom += a.asteroids[i].vel * a.asteroids[i].mass; biggest = std::max(biggest, a.asteroids[i].radius); ++n;
+    }
+    float momErr = m > 0 ? length(mom / m - V) : 99.0f;
+    std::printf("    a %.0f m rock (%.0f hit points, a railgun slug does 120) broke into %d fragments, largest %.0f m\n", R, hp, n, biggest);
+    std::printf("    fragments carry %.0f%% of its mass (the rest is dust); their combined velocity differs from the parent's by %.4f m/s\n", 100 * m / M, momErr);
+    check(survives, "an asteroid survives a hit that does less damage than its strength");
+    check(!a.asteroids[pick].alive && n >= 2, "enough damage splits it into two or more fragments");
+    check(m > 0.6f * M && m <= M * 1.001f, "the fragments together weigh no more than the original, and most of it");
+    check(momErr < 0.01f, "momentum is conserved: the fragments as a whole keep the parent's velocity");
+    check(biggest < R, "every fragment is smaller than the original");
+    // keep shooting: everything eventually grinds down to dust
+    int guard = 0;
+    for (size_t i = before; i < a.asteroids.size() && guard < 2000; ++i, ++guard) a.debugHitAsteroid(i, 1e7f, Vec3(1, 0, 0));
+    int left = 0;
+    for (size_t i = before; i < a.asteroids.size(); ++i) left += a.asteroids[i].alive ? 1 : 0;
+    check(left == 0 && guard < 2000, "repeated hits reduce every fragment to dust");
+  }
+
   std::printf("Procedural sectors\n");
   bool varied = true;
   for (int type = 0; type < SEC_COUNT; ++type) {

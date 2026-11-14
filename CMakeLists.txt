@@ -45,6 +45,7 @@ add_executable(hullbreaker
   src/ui.cpp
   src/selftest.cpp
   src/audio.cpp
+  src/textures.cpp
   src/miniaudio_impl.cpp
   ${SHADER_HEADERS})
 target_include_directories(hullbreaker PRIVATE ${GEN_DIR} src third_party)

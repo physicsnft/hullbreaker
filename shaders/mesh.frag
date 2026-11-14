@@ -17,6 +17,30 @@ layout(location = 0) out vec4 outColor;
 
 const float PI = 3.14159265;
 
+layout(set = 0, binding = 1) uniform sampler2DArray texA; // rgb colour multiplier / 1.3, a roughness
+layout(set = 0, binding = 2) uniform sampler2DArray texB; // rg normal, b occlusion, a wear
+
+struct Surf { vec3 albedo; float rough; vec3 n; float ao; float wear; };
+// Triplanar mapping: the texture is projected along the three object axes and blended by the
+// surface normal, so no mesh needs texture coordinates and the pattern sticks to the object.
+// `n` is the object-space normal; the returned normal is object-space too.
+Surf triplanar(vec3 p, vec3 n, float layer, float bump) {
+  vec3 w = pow(abs(n), vec3(4.0));
+  w /= w.x + w.y + w.z;
+  vec4 a = texture(texA, vec3(p.zy, layer)) * w.x + texture(texA, vec3(p.xz, layer)) * w.y + texture(texA, vec3(p.xy, layer)) * w.z;
+  vec4 bx = texture(texB, vec3(p.zy, layer)), by = texture(texB, vec3(p.xz, layer)), bz = texture(texB, vec3(p.xy, layer));
+  vec4 b = bx * w.x + by * w.y + bz * w.z;
+  vec2 tx = (bx.rg * 2.0 - 1.0) * bump, ty = (by.rg * 2.0 - 1.0) * bump, tz = (bz.rg * 2.0 - 1.0) * bump;
+  Surf s;
+  s.albedo = a.rgb * 1.3;
+  s.rough = a.a;
+  s.ao = b.b;
+  s.wear = b.a;
+  s.n = normalize(vec3(n.x, tx.y + n.y, tx.x + n.z) * w.x + vec3(ty.x + n.x, n.y, ty.y + n.z) * w.y + vec3(tz.x + n.x, tz.y + n.y, n.z) * w.z);
+  return s;
+}
+#define TO_WORLD(v) normalize(vAxX * (v).x + vAxY * (v).y + vAxZ * (v).z)
+
 vec3 envColor(vec3 d, float rough) {
   vec3 L = normalize(G.sunDir.xyz);
   if (G.ambient.w > 0.5) { // ---- station hangar
@@ -169,57 +193,34 @@ void main() {
   float lod = clamp(1.0 - dist / 260.0, 0.0, 1.0);
   float fine = clamp(1.0 - dist / 55.0, 0.0, 1.0); // the finest detail fades out before it can shimmer
 
-  if (mat == 0) { // ---- hull: brushed, worn metal plating with painted panels
-    vec2 uv = tuv * 1.15 + seed * 17.0;
-    vec2 cell = floor(uv);
-    vec2 f = fract(uv) - 0.5;
-    vec2 g = abs(f);
-    float seen = resolvable(1.15);
-    float line = smoothstep(0.455, 0.495, max(g.x, g.y)) * lod * seen;
-    float pv = mix(0.5, hash21(cell + seed * 3.1), seen);
-    float grime = mix(0.5, fbm3(vLocal * 0.9 + seed * 5.0), resolvable(3.6));
-    // brushing runs along the part; it varies the micro-roughness in fine streaks
-    float brush = mix(0.5, noise3(vec3(tuv.x * 46.0, tuv.y * 1.3, seed * 9.0)) * 0.6 + noise3(vec3(tuv.x * 150.0, tuv.y * 2.0, seed)) * 0.4, fine);
-    float scratch = pow(noise3(vec3(tuv.x * 5.0 + tuv.y * 3.0, tuv.y * 70.0 - tuv.x * 20.0, seed * 4.0)), 9.0) * fine;
-    // paint: saturated colours are a coat over the metal, chipped away where worn
+  vec3 nObj = normalize(vec3(dot(N, vAxX), dot(N, vAxY), dot(N, vAxZ)));
+
+  if (mat == 0) { // ---- hull: textured plating (panels, seams, rivets, scratches) over steel, with painted areas
+    Surf s = triplanar(vLocal / 6.0 + floor(seed * 8.0) * 0.37, nObj, 0.0, 1.0);
+    // paint: saturated colours are a coat over the metal, gone wherever the wear map says the surface is worn through
     float mx = max(albedo.r, max(albedo.g, albedo.b)), mn = min(albedo.r, min(albedo.g, albedo.b));
     float paint = smoothstep(0.22, 0.55, (mx - mn) / max(mx, 1e-3));
     vec3 ao = abs(vObj);
     float e2 = max(min(ao.x, ao.y), max(min(ao.y, ao.z), min(ao.x, ao.z)));
     float edge = smoothstep(0.42, 0.5, e2) * lod; // exposed edges polish themselves bright
-    float chips = smoothstep(0.62, 0.78, fbm3(vLocal * 3.3 + seed * 7.0) + edge * 0.35) * resolvable(13.0);
+    float chips = smoothstep(0.35, 0.6, s.wear + edge * 0.4);
     paint *= 1.0 - chips;
     vec3 steel = mix(vec3(dot(albedo, vec3(0.333))), albedo, 0.35) * 0.9 + 0.12;
-    vec3 base = mix(mix(albedo, steel, 1.0 - paint), albedo, paint);
+    vec3 base = mix(steel, albedo, paint) * s.albedo;
+    base = mix(base, base * 1.4 + 0.06, edge * 0.5);
     metal = (1.0 - 0.85 * paint) * vParams.w;
-    rough = mix(0.30 + 0.20 * brush + 0.12 * pv, 0.42, paint);
-    rough += 0.25 * smoothstep(0.45, 0.8, grime) - 0.12 * edge + 0.2 * scratch;
-    base *= 0.84 + 0.22 * pv;
-    base *= 0.82 + 0.3 * grime;
-    base = mix(base, base * 1.5 + 0.08, edge * 0.6 + scratch * 0.5);
-    // oxidised streaks collect in the seams
-    float rust = smoothstep(0.5, 0.85, grime) * (0.35 + 0.65 * line);
-    base = mix(base, vec3(0.42, 0.20, 0.07) * (0.5 + pv), rust * 0.45 * (1.0 - paint * 0.5));
-    rough += rust * 0.2;
-    base *= 1.0 - 0.6 * line;
-    float rivet = smoothstep(0.06, 0.03, length(g - vec2(0.4))) * lod;
-    base *= 1.0 - 0.3 * rivet;
+    rough = s.rough + 0.14 * paint - 0.1 * edge;
     albedo = base;
-    // bevelled seams catch the light
-    vec2 bev = smoothstep(0.43, 0.47, g) * (1.0 - smoothstep(0.47, 0.5, g)) * sign(f);
-    N = normalize(N - (U * bev.x + W * bev.y) * 0.55 * lod);
-    N = normalize(N + (U * (brush - 0.5)) * 0.035 * fine);
-    envOcc = 1.0 - 0.5 * line;
-  } else if (mat == 10) { // ---- station structure: large painted panels and bare steel
-    vec2 uv = tuv * 0.28 + seed * 5.0;
-    vec2 g = abs(fract(uv) - 0.5);
-    float line = smoothstep(0.487, 0.498, max(g.x, g.y)) * clamp(1.0 - dist / 110.0, 0.0, 1.0);
-    float pv = hash21(floor(uv) + seed * 3.0);
-    float grime = fbm3(vLocal * 0.25 + seed * 9.0);
-    albedo *= (0.88 + 0.2 * pv) * (0.8 + 0.3 * grime) * (1.0 - 0.5 * line);
-    albedo *= 0.75 + 0.25 * smoothstep(0.0, 2.5, vWorld.y); // scuffed and dirty near the deck
+    N = TO_WORLD(s.n);
+    envOcc = s.ao;
+  } else if (mat == 10) { // ---- station structure: plated, bolted, scuffed
+    Surf s = triplanar(vLocal / 4.0 + floor(seed * 16.0) * 0.21, nObj, 3.0, 1.0);
+    albedo *= s.albedo;
+    albedo *= 0.75 + 0.25 * smoothstep(0.0, 2.5, vWorld.y); // dirtier near the deck
     metal = vParams.w;
-    rough = 0.62 - 0.3 * metal + 0.15 * grime;
+    rough = s.rough + 0.2 - 0.35 * metal;
+    N = TO_WORLD(s.n);
+    envOcc = s.ao;
   } else if (mat == 9) { // ---- corrugated, painted cargo container
     bool zFace = !(an.x > an.y && an.x > an.z) && !(an.y > an.z);
     float ribs = sin((zFace ? tuv.x : tuv.y) * 9.0);
@@ -231,27 +232,31 @@ void main() {
     albedo *= 0.8 + 0.2 * ribs;
     float band = smoothstep(0.03, 0.0, abs(vObj.y - 0.18) - 0.07); // id stripe
     albedo = mix(albedo, vec3(0.85), band * 0.6 * (1.0 - chips));
+    Surf s = triplanar(vLocal / 4.0 + seed * 3.0, nObj, 3.0, 0.0);
+    albedo *= s.albedo;
     metal = 0.15 + 0.6 * chips;
-    rough = 0.5 + 0.2 * wear;
-  } else if (mat == 1) { // ---- rock
-    vec3 p = vObj * 7.0 + seed * 31.0;
-    float n = fbm(p);
-    float n2 = fbm3(p * 3.7 + 11.0);
-    albedo *= 0.35 + 0.9 * n;
-    albedo = mix(albedo, albedo * vec3(1.2, 0.95, 0.78), n2);
-    float e = 0.05;
-    float n0 = noise3(p * 4.0);
-    vec3 grad = vec3(noise3(p * 4.0 + vec3(e, 0, 0)) - n0, noise3(p * 4.0 + vec3(0, e, 0)) - n0, noise3(p * 4.0 + vec3(0, 0, e)) - n0) / e;
-    N = normalize(N - grad * 0.18);
-    rough = 0.92; F0d = 0.03; envOcc = 0.35;
+    rough = 0.3 + 0.2 * wear + 0.4 * s.rough;
+  } else if (mat == 1) { // ---- rock: the texture at two scales, so both mountains and pebbles have detail
+    vec3 q = vObj * 2.3 + seed * 31.0;
+    Surf a = triplanar(q, nObj, 1.0, 1.0);
+    Surf b = triplanar(q * 5.3 + 0.37, nObj, 1.0, 0.8);
+    float tone = fbm3(vObj * 2.0 + seed * 9.0);
+    albedo *= a.albedo * (0.5 + 0.75 * dot(b.albedo, vec3(0.333))) * (0.6 + 0.7 * tone);
+    albedo = mix(albedo, albedo * vec3(1.18, 0.96, 0.8), smoothstep(0.4, 0.7, tone));
+    N = TO_WORLD(normalize(a.n + b.n - nObj));
+    float crack = (1.0 - smoothstep(0.0, 0.03 + 0.03 * dmg, abs(fbm3(vObj * 4.5 + seed * 17.0) - 0.5))) * clamp(dmg * 2.2, 0.0, 1.0);
+    albedo *= 1.0 - 0.85 * crack;
+    rough = a.rough; F0d = 0.03; envOcc = 0.4 * a.ao * b.ao * (1.0 - crack);
   } else if (mat == 2) { // ---- canopy glass
     albedo = vColor.rgb * 0.12;
     rough = 0.06; F0d = 0.09;
-  } else if (mat == 4) { // ---- ice
-    vec3 p = vObj * 6.0 + seed * 31.0;
-    float n = fbm(p);
-    albedo = mix(albedo * 0.55, vec3(0.92, 0.97, 1.0), smoothstep(0.35, 0.75, n));
-    rough = 0.18 + 0.3 * n; F0d = 0.06;
+  } else if (mat == 4) { // ---- ice: clear blue where bare, white where frosted, split by fracture lines
+    Surf s = triplanar(vObj * 2.6 + seed * 31.0, nObj, 2.0, 1.0);
+    albedo = mix(albedo * 0.5, vec3(0.92, 0.97, 1.0), s.wear) * s.albedo;
+    N = TO_WORLD(s.n);
+    float crack = (1.0 - smoothstep(0.0, 0.03 + 0.03 * dmg, abs(fbm3(vObj * 4.5 + seed * 17.0) - 0.5))) * clamp(dmg * 2.2, 0.0, 1.0);
+    albedo *= 1.0 - 0.6 * crack;
+    rough = s.rough; F0d = 0.06; envOcc = s.ao;
   } else if (mat == 5) { // ---- hangar deck plating
     vec2 w = vWorld.xz;
     vec2 uv = w * 0.25;
@@ -260,7 +265,6 @@ void main() {
     float pv = hash21(floor(uv));
     float wear = fbm3(vec3(w * 0.35, 3.0));
     albedo *= 0.75 + 0.3 * pv;
-    albedo *= 1.0 - 0.55 * line;
     float r = length(w);
     // hazard ring around the service pad
     float ring = smoothstep(0.0, 0.15, r - 15.2) * smoothstep(0.0, 0.15, 16.6 - r);
@@ -275,9 +279,12 @@ void main() {
     emissive += vec3(0.1, 0.7, 1.0) * lamp * 2.5;
     // soft contact shadow under the ship
     albedo *= mix(0.3, 1.0, smoothstep(0.25, 1.15, length(w * vec2(0.085, 0.07))));
+    vec4 fa = texture(texA, vec3(w * 0.25, 3.0)), fb = texture(texB, vec3(w * 0.25, 3.0));
+    albedo *= fa.rgb * 1.3;
+    N = normalize(N + vec3(fb.r * 2.0 - 1.0, 0.0, fb.g * 2.0 - 1.0) * step(0.9, N.y));
     metal = 0.45;
-    rough = 0.46 + 0.28 * wear + 0.12 * pv;
-    envOcc = mix(0.35, 1.0, smoothstep(0.3, 1.3, length(w * vec2(0.085, 0.07)))) * (1.0 - 0.6 * line);
+    rough = fa.a + 0.08 + 0.2 * wear;
+    envOcc = mix(0.35, 1.0, smoothstep(0.3, 1.3, length(w * vec2(0.085, 0.07)))) * fb.b;
   }
 
   if (mat == 3) { // self-lit
@@ -288,7 +295,7 @@ void main() {
   }
 
   // ---- battle damage: scorch marks eat across the surface as damage rises
-  if (dmg > 0.01) {
+  if (dmg > 0.01 && mat != 1 && mat != 4) {
     float bres = resolvable(6.4);
     float n = mix(0.5, fbm3(vLocal * 1.6 + seed * 13.0), bres);
     float burn = smoothstep(n - 0.12, n + 0.06, dmg * 1.15);

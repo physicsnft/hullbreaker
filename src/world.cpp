@@ -166,7 +166,8 @@ void World::addAsteroid(Rng& r, Vec3 pos, float radius, int kind) {
     }
   }
   a.mass = 4.19f * radius * radius * radius * density;
-  a.hp = radius < 45 ? radius * 11.0f : 1e9f;
+  // strength grows with size, but less than mass does: big rocks are riddled with flaws
+  a.hp = a.maxHp = (kind == 3 ? 3.0f : (kind == 0 ? 6.0f : 4.5f)) * std::pow(radius, 1.5f);
   asteroids.push_back(a);
 }
 
@@ -332,7 +333,7 @@ void World::spawnDebris(const ShipEntity& s, const std::vector<int>& idx, Vec3 d
   for (int i : idx) {
     const Part& p = s.ship.parts[i];
     if (p.internal) continue;
-    d.pieces.push_back({p.mesh, p.pos - c, p.rot, p.scale, p.color, p.material, p.seed, 1.0f - clampf(p.hp / p.maxHp, 0.0f, 1.0f), p.emissive * 0.2f});
+    d.pieces.push_back({p.mesh, p.pos - c, p.rot, p.scale, p.color, p.material, p.seed, std::max(0.55f, 1.0f - clampf(p.hp / p.maxHp, 0.0f, 1.0f)), p.emissive * 0.2f});
   }
   d.pos = s.pos + rotate(s.rot, c);
   d.rot = s.rot;
@@ -469,31 +470,102 @@ void World::explodeShip(ShipEntity& s) {
 }
 
 void World::damageAsteroid(size_t idx, float dmg, Vec3 hitPos, Vec3 dir) {
-  Vec3 dust = asteroids[idx].material == MAT_ICE ? Vec3(0.6f, 0.8f, 1.0f) : Vec3(0.8f, 0.6f, 0.4f);
+  const bool ice = asteroids[idx].material == MAT_ICE, wreck = asteroids[idx].material == MAT_HULL;
+  Vec3 dust = ice ? Vec3(0.6f, 0.8f, 1.0f) : (wreck ? Vec3(1.0f, 0.7f, 0.35f) : Vec3(0.8f, 0.6f, 0.4f));
   fxSparks(hitPos, asteroids[idx].vel, -dir, dust, 4, 18.0f);
   sound(SFX_ROCK_HIT, hitPos, 0.8f);
   emit(hitPos, asteroids[idx].vel - dir * 4.0f, 0.9f, 0.8f, 3.0f, dust * 0.08f, 0.25f, dust * 0.0f, 0.0f, 3, 0, 1.0f);
-  asteroids[idx].hp -= dmg;
-  if (asteroids[idx].hp > 0) return;
-  Asteroid a = asteroids[idx];
-  asteroids[idx].alive = false;
-  fxExplosion(a.pos, a.vel, std::min(a.radius * 0.35f, 4.0f));
-  sound(SFX_EXPLOSION, a.pos, 1.0f);
-  for (int i = 0; i < 14; ++i) fxSmoke(a.pos + rng.inSphere() * a.radius, a.vel + rng.inSphere() * 8.0f, a.radius * 0.5f);
-  if (a.radius > 9 && a.material != MAT_HULL) {
-    int n = rng.irange(2, 3);
-    Rng r(rng.next());
-    for (int i = 0; i < n; ++i) {
-      Vec3 d = r.unit();
-      size_t before = asteroids.size();
-      addAsteroid(r, a.pos + d * a.radius * 0.5f, a.radius * r.range(0.42f, 0.6f), a.mesh == M_CRYSTAL ? 2 : (a.material == MAT_ICE ? 1 : 0));
-      if (asteroids.size() > before) {
-        asteroids.back().vel = a.vel + d * r.range(4, 12);
-        asteroids.back().color = a.color;
-        asteroids.back().angVel = r.unit() * r.range(0.2f, 1.0f);
+  float overkill;
+  {
+    Asteroid& a = asteroids[idx];
+    a.hp -= dmg;
+    overkill = -a.hp;
+    if (!wreck) a.damage = std::max(a.damage, 1.0f - clampf(a.hp / a.maxHp, 0.0f, 1.0f)); // cracks spread as it weakens
+    if (a.hp > 0) {
+      // spall: a solid hit knocks chips off the surface
+      if (a.radius > 5 && rng.chance(clampf(dmg / 50.0f, 0.1f, 1.0f))) {
+        int chips = dmg > 50 ? 3 : 1;
+        for (int i = 0; i < chips && debris.size() < 240; ++i) {
+          Debris d;
+          float s = rng.range(0.5f, 1.6f) * (dmg > 50 ? 1.4f : 1.0f);
+          int mesh = a.mesh == M_CRYSTAL ? M_CRYSTAL : (wreck ? M_BOX : M_ASTLO0 + rng.irange(0, AST_VARIANTS - 1));
+          d.pieces.push_back({mesh, Vec3(), Quat(), Vec3(s, s * rng.range(0.6f, 1.0f), s * rng.range(0.6f, 1.0f)), a.color, a.material, rng.uniform(), wreck ? 0.6f : 0.0f, 0.0f});
+          d.pos = hitPos;
+          d.rot = normalize(Quat(rng.range(-1, 1), rng.range(-1, 1), rng.range(-1, 1), rng.range(-1, 1)));
+          d.vel = a.vel + normalize(-dir + rng.unit() * 0.9f) * rng.range(6, 22);
+          d.angVel = rng.unit() * rng.range(1, 5);
+          d.life = d.maxLife = rng.range(8, 16);
+          d.smoke = 100; // chips do not trail smoke
+          debris.push_back(std::move(d));
+        }
       }
+      return;
     }
   }
+  fractureAsteroid(idx, dir, overkill);
+}
+
+// Break an asteroid apart. Volume (and so mass) is shared out among the fragments, with a
+// little lost as dust; the fragments separate across the line of the shot, carry the
+// parent's motion and spin, and their separation velocities sum to zero momentum.
+void World::fractureAsteroid(size_t idx, Vec3 dir, float overkill) {
+  const Asteroid a = asteroids[idx];
+  asteroids[idx].alive = false;
+  const bool ice = a.material == MAT_ICE, wreck = a.material == MAT_HULL;
+  Vec3 dustCol = ice ? Vec3(0.55f, 0.7f, 0.85f) : (wreck ? Vec3(0.25f, 0.22f, 0.2f) : Vec3(0.42f, 0.34f, 0.27f));
+  float R = a.radius;
+  // dust cloud, flash and flying grit
+  emit(a.pos, a.vel, 0.18f, R * 1.2f, R * 2.4f, Vec3(1.0f, 0.85f, 0.65f) * 1.2f, 0, Vec3(0), 0, 0);
+  int puffs = (int)clampf(R * 1.2f, 8.0f, 46.0f);
+  for (int i = 0; i < puffs; ++i) {
+    Vec3 o = rng.inSphere();
+    emit(a.pos + o * R * 0.8f, a.vel + o * rng.range(2.0f, 9.0f), rng.range(1.5f, 3.5f), R * 0.3f, R * rng.range(0.7f, 1.3f), dustCol * 0.35f, 0.45f, dustCol * 0.0f, 0.0f, 3, 0, 0.5f);
+  }
+  fxSparks(a.pos, a.vel, Vec3(0, 0, 0), ice ? Vec3(0.7f, 0.9f, 1.0f) : Vec3(1.0f, 0.75f, 0.45f), puffs, 12.0f + R);
+  if (wreck) fxExplosion(a.pos, a.vel, std::min(R * 0.3f, 3.0f));
+  sound(SFX_EXPLOSION, a.pos, clampf(R / 22.0f, 0.5f, 1.4f));
+  if (R > 60) shake = std::max(shake, clampf(R * 40.0f / (length(a.pos - lastPlayerPos) + 50.0f), 0.0f, 2.0f));
+  if (R < 4.5f || asteroids.size() > 700) return; // too small to leave more than rubble
+
+  int n = 2 + (rng.chance(0.55f) ? 1 : 0) + (R > 35 && rng.chance(0.6f) ? 1 : 0);
+  float f[4], sum = 0;
+  for (int i = 0; i < n; ++i) { f[i] = rng.range(0.35f, 1.0f); sum += f[i]; }
+  // fragments part across the shot line, like a rock split by a wedge
+  Vec3 u1 = normalize(cross(dir, rng.unit()), Vec3(1, 0, 0)), u2 = normalize(cross(dir, u1), Vec3(0, 1, 0));
+  float speed = clampf(2.5f + overkill * 0.04f + 12.0f / std::sqrt(R), 2.5f, 16.0f);
+  float phase = rng.range(0, 2 * PI);
+  int kind = a.mesh == M_CRYSTAL ? 2 : (ice ? 1 : (wreck ? 3 : 0));
+  Rng r(rng.next());
+  size_t first = asteroids.size();
+  for (int i = 0; i < n; ++i) {
+    float frac = f[i] / sum * 0.88f;
+    float ri = R * std::cbrt(frac);
+    if (ri < 2.2f) continue;
+    float ang = phase + 2 * PI * i / n + rng.range(-0.35f, 0.35f);
+    Vec3 d = normalize(u1 * std::cos(ang) + u2 * std::sin(ang) + dir * rng.range(-0.1f, 0.45f));
+    Vec3 pos = a.pos + d * (R - ri) * 0.95f;
+    size_t before = asteroids.size();
+    addAsteroid(r, pos, wreck ? ri / 0.85f : ri, kind);
+    if (asteroids.size() == before) continue;
+    Asteroid& c = asteroids.back();
+    c.mass = a.mass * frac;
+    c.color = a.color;
+    c.vel = a.vel + cross(a.angVel, pos - a.pos) + d * speed * rng.range(0.7f, 1.3f);
+    c.angVel = a.angVel + rng.unit() * rng.range(0.1f, 0.9f) * std::min(1.0f, 12.0f / ri);
+    c.hp = c.maxHp * 0.8f; // already cracked
+  }
+  // remove any net momentum the separation added: the pieces as a whole keep moving as the parent did
+  float m = 0;
+  Vec3 mom;
+  for (size_t i = first; i < asteroids.size(); ++i) { m += asteroids[i].mass; mom += (asteroids[i].vel - a.vel) * asteroids[i].mass; }
+  if (m > 0)
+    for (size_t i = first; i < asteroids.size(); ++i) asteroids[i].vel -= mom / m;
+}
+
+bool World::debugHitAsteroid(size_t idx, float dmg, Vec3 dir) {
+  if (idx >= asteroids.size() || !asteroids[idx].alive) return false;
+  damageAsteroid(idx, dmg, asteroids[idx].pos - dir * asteroids[idx].radius, dir);
+  return true;
 }
 
 // =====================================================================================
@@ -880,7 +952,7 @@ void World::stepProjectiles(float dt) {
       Asteroid& a = asteroids[hitAst];
       a.vel += (p.vel - a.vel) * (w.projMass / a.mass);
       if (w.splash > 0) { fxExplosion(hp, a.vel, w.splash * 0.4f); sound(SFX_EXPLOSION, hp, 0.8f); }
-      damageAsteroid((size_t)hitAst, w.damage, hp, normalize(p.vel));
+      damageAsteroid((size_t)hitAst, w.damage * (w.splash > 0 ? 1.7f : 1.0f), hp, normalize(p.vel));
       p.alive = false;
     } else if (p.life <= 0) {
       if (w.splash > 0) fxExplosion(p.pos, p.vel * 0.1f, 1.0f);

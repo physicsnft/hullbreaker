@@ -1,5 +1,7 @@
 #include "audio.h"
 #include "game.h"
+#include "textures.h"
+#include <string>
 #include "weapons.h"
 #include <cstdio>
 #include <cstdlib>
@@ -18,6 +20,8 @@ static void usage() {
       "  --start menu|hangar|play\n"
       "  --difficulty N         0 rookie, 1 pilot (default), 2 veteran, 3 ace\n"
       "  --nosound              run without audio\n"
+      "  --texsize N            surface texture resolution: 512, 1024, 2048 (default) or 4096\n"
+      "  --dump-textures DIR    write the generated textures to DIR as PPM images\n"
       "  --render-audio F [S]   write S seconds of the generated music (for --seed) plus all effects to WAV file F\n"
       "  --validate             enable Vulkan validation layers\n"
       "  --autopilot --frames N --fixed-dt S --warp S --log   (demo / testing)\n"
@@ -46,6 +50,34 @@ int main(int argc, char** argv) {
     else if (is("--selftest")) return runSelfTest();
     else if (is("--difficulty")) o.difficulty = std::atoi(next());
     else if (is("--nosound")) o.sound = false;
+    else if (is("--texsize")) o.texSize = std::atoi(next());
+    else if (is("--dump-textures")) { // write every generated texture layer as PPM images into a directory
+      std::string dir = next();
+      TextureSet ts;
+      buildTextures(o.texSize, ts);
+      static const char* names[TEX_LAYERS] = {"hull", "rock", "ice", "industrial"};
+      for (int l = 0; l < ts.layers; ++l)
+        for (int k = 0; k < 4; ++k) { // colour, roughness, normal, occlusion+wear
+          static const char* kind[4] = {"colour", "roughness", "normal", "occlusion_wear"};
+          std::string path = dir + "/" + names[l] + "_" + kind[k] + ".ppm";
+          FILE* f = std::fopen(path.c_str(), "wb");
+          if (!f) { std::fprintf(stderr, "cannot write %s\n", path.c_str()); return 1; }
+          std::fprintf(f, "P6\n%d %d\n255\n", ts.size, ts.size);
+          const uint8_t* A = ts.mipsA[0].data() + (size_t)l * ts.size * ts.size * 4;
+          const uint8_t* B = ts.mipsB[0].data() + (size_t)l * ts.size * ts.size * 4;
+          for (size_t i = 0; i < (size_t)ts.size * ts.size; ++i) {
+            uint8_t px[3];
+            if (k == 0) { px[0] = A[i * 4]; px[1] = A[i * 4 + 1]; px[2] = A[i * 4 + 2]; }
+            else if (k == 1) px[0] = px[1] = px[2] = A[i * 4 + 3];
+            else if (k == 2) { px[0] = B[i * 4]; px[1] = B[i * 4 + 1]; px[2] = 255; }
+            else { px[0] = px[1] = B[i * 4 + 2]; px[2] = B[i * 4 + 3]; }
+            std::fwrite(px, 1, 3, f);
+          }
+          std::fclose(f);
+        }
+      std::printf("wrote %d texture images (%dx%d) to %s\n", ts.layers * 4, ts.size, ts.size, dir.c_str());
+      return 0;
+    }
     else if (is("--orbit")) o.orbit = (float)std::atof(next());
     else if (is("--cam-yaw")) o.camYaw = (float)std::atof(next());
     else if (is("--render-audio")) {

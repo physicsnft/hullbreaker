@@ -63,7 +63,7 @@ MeshData makeBox() {
   b.quad(v[0], v[3], v[7], v[4]); b.quad(v[1], v[2], v[6], v[5]);
   return b.m;
 }
-MeshData makeTaper() {
+[[maybe_unused]] MeshData makeTaper() {
   MB b;
   const float h = 0.5f, f = 0.2f;
   Vec3 v[8] = {{-f, -f, -h}, {f, -f, -h}, {f, f, -h}, {-f, f, -h}, {-h, -h, h}, {h, -h, h}, {h, h, h}, {-h, h, h}};
@@ -111,7 +111,7 @@ MeshData makeCone(int n) {
   }
   return b.m;
 }
-MeshData makeWing(bool right) {
+[[maybe_unused]] MeshData makeWing(bool right) {
   MB b;
   b.center = Vec3(0, 0, 0.08f);
   float s = right ? 1.0f : -1.0f;
@@ -219,6 +219,109 @@ MeshData makeAsteroid(uint32_t seed, int level, float& meanRadius) {
   return smoothFromIndexed(v, idx);
 }
 
+// ---- smooth hull shapes -------------------------------------------------------------
+// A loft sweeps a superellipse cross-section along Z. Exponent 2 is an ellipse, higher
+// values approach a rectangle with rounded corners. Rings share vertices, so the skin is
+// smooth-shaded; the end caps get their own vertices so the rims stay crisp.
+struct Station { float z, w, h, y, n; };
+MeshData makeLoft(const std::vector<Station>& st, int segs = 32) {
+  std::vector<Vec3> p; std::vector<uint32_t> idx;
+  auto ring = [&](const Station& s) {
+    uint32_t base = (uint32_t)p.size();
+    for (int i = 0; i < segs; ++i) {
+      float a = 2 * PI * (i + 0.5f) / segs, c = std::cos(a), sn = std::sin(a), e = 2.0f / s.n;
+      p.push_back(Vec3(s.w * (c < 0 ? -1.0f : 1.0f) * std::pow(std::fabs(c), e), s.y + s.h * (sn < 0 ? -1.0f : 1.0f) * std::pow(std::fabs(sn), e), s.z));
+    }
+    return base;
+  };
+  std::vector<uint32_t> rings;
+  for (auto& s : st) rings.push_back(ring(s));
+  for (size_t k = 0; k + 1 < rings.size(); ++k)
+    for (int i = 0; i < segs; ++i) {
+      uint32_t a = rings[k] + i, b = rings[k] + (i + 1) % segs, c = rings[k + 1] + (i + 1) % segs, d = rings[k + 1] + i;
+      uint32_t q[6] = {a, b, c, a, c, d};
+      idx.insert(idx.end(), q, q + 6);
+    }
+  for (size_t end : {(size_t)0, st.size() - 1}) {
+    uint32_t base = ring(st[end]), centre = (uint32_t)p.size();
+    p.push_back(Vec3(0, st[end].y, st[end].z));
+    for (int i = 0; i < segs; ++i) { idx.push_back(centre); idx.push_back(base + i); idx.push_back(base + (i + 1) % segs); }
+  }
+  return smoothFromIndexed(p, idx);
+}
+// A blade is a tapered, swept surface with an airfoil section: rounded leading edge, sharp
+// trailing edge. mode 0: wing with its root at -X, 1: mirrored, 2: upright fin with its root at -Y.
+MeshData makeBlade(float rootZ0, float rootZ1, float tipZ0, float tipZ1, float rootT, float tipT, int mode) {
+  const int C = 14, S = 4;
+  std::vector<Vec3> p; std::vector<uint32_t> idx;
+  auto place = [&](float s, float th, float z) { return mode == 0 ? Vec3(s, th, z) : (mode == 1 ? Vec3(-s, th, z) : Vec3(th, s, z)); };
+  auto ring = [&](float t) {
+    uint32_t base = (uint32_t)p.size();
+    float z0 = lerpf(rootZ0, tipZ0, t), z1 = lerpf(rootZ1, tipZ1, t), T = lerpf(rootT, tipT, t), s = t - 0.5f;
+    for (int k = 0; k < 2 * C; ++k) {
+      float u = k <= C ? (float)k / C : (float)(2 * C - k) / C; // out along the top, back along the bottom
+      float side = k <= C ? 1.0f : -1.0f;
+      float uu = u * u * (3 - 2 * u) * 0.35f + u * 0.65f;        // a few more samples near the edges
+      float th = T * 2.598f * std::sqrt(uu) * (1 - uu);
+      p.push_back(place(s, th * side, lerpf(z0, z1, uu)));
+    }
+    return base;
+  };
+  std::vector<uint32_t> rings;
+  for (int i = 0; i <= S; ++i) rings.push_back(ring((float)i / S));
+  const int R = 2 * C;
+  for (int k = 0; k < S; ++k)
+    for (int i = 0; i < R; ++i) {
+      uint32_t a = rings[k] + i, b = rings[k] + (i + 1) % R, c = rings[k + 1] + (i + 1) % R, d = rings[k + 1] + i;
+      uint32_t q[6] = {a, b, c, a, c, d};
+      idx.insert(idx.end(), q, q + 6);
+    }
+  for (float t : {0.0f, 1.0f}) {
+    uint32_t base = ring(t), centre = (uint32_t)p.size();
+    p.push_back(place(t - 0.5f, 0, (lerpf(rootZ0, tipZ0, t) + lerpf(rootZ1, tipZ1, t)) * 0.5f));
+    for (int i = 0; i < R; ++i) { idx.push_back(centre); idx.push_back(base + i); idx.push_back(base + (i + 1) % R); }
+  }
+  return smoothFromIndexed(p, idx);
+}
+MeshData makeHullTaper() { // full section at +Z easing down to 40% at -Z
+  std::vector<Station> st;
+  for (int i = 0; i <= 10; ++i) {
+    float t = i / 10.0f, k = lerpf(1.0f, 0.4f, t * t * (3 - 2 * t));
+    st.push_back({0.5f - t, 0.5f * k, 0.5f * k, 0, 4.0f});
+  }
+  return makeLoft(st);
+}
+MeshData makeNose() { // ogive: tangent to the fuselage at its base, closing to a point
+  std::vector<Station> st;
+  for (int i = 0; i <= 12; ++i) {
+    float t = i / 12.0f, r = 0.5f * std::sqrt(std::max(0.0f, 1 - std::pow(t, 1.7f))) * (1 - 0.25f * t);
+    st.push_back({0.5f - t, std::max(r, 0.012f), std::max(r, 0.012f), 0, lerpf(4.0f, 2.2f, t)});
+  }
+  return makeLoft(st);
+}
+MeshData makePrism(float n, float chamfer) { // rounded-corner bar with eased ends
+  std::vector<Station> st;
+  const float c = chamfer;
+  static const float e[4][2] = {{0.0f, 1.0f}, {0.3f, 0.55f}, {0.7f, 0.2f}, {1.0f, 0.0f}};
+  for (auto& k : e) st.push_back({-0.5f + c * k[0], 0.5f - c * k[1] * 0.6f, 0.5f - c * k[1] * 0.6f, 0, n});
+  for (int i = 3; i >= 0; --i) st.push_back({0.5f - c * e[i][0], 0.5f - c * e[i][1] * 0.6f, 0.5f - c * e[i][1] * 0.6f, 0, n});
+  return makeLoft(st);
+}
+MeshData makeNacelle() {
+  static const float pr[9][2] = {{-0.5f, 0.40f}, {-0.46f, 0.455f}, {-0.38f, 0.49f}, {-0.2f, 0.5f}, {0.15f, 0.5f}, {0.32f, 0.485f}, {0.42f, 0.46f}, {0.48f, 0.43f}, {0.5f, 0.40f}};
+  std::vector<Station> st;
+  for (auto& k : pr) st.push_back({k[0], k[1], k[1], 0, 2.0f});
+  return makeLoft(st);
+}
+MeshData makeNozzle() { // bell, narrow at the throat (-Z), flaring aft
+  std::vector<Station> st;
+  for (int i = 0; i <= 8; ++i) {
+    float t = i / 8.0f, r = 0.27f + 0.23f * std::sin(t * PI * 0.5f);
+    st.push_back({-0.5f + t, r, r, 0, 2.0f});
+  }
+  return makeLoft(st);
+}
+
 } // namespace
 
 void buildMeshes(std::vector<MeshData>& out) {
@@ -228,10 +331,16 @@ void buildMeshes(std::vector<MeshData>& out) {
   out[M_CONE] = makeCone(24);
   out[M_SPHERE] = makeSphere(3);
   out[M_WEDGE] = makeWedge();
-  out[M_TAPER] = makeTaper();
+  out[M_TAPER] = makeHullTaper();
   out[M_PRISM] = makeCyl(6, false);
-  out[M_WING_R] = makeWing(true);
-  out[M_WING_L] = makeWing(false);
+  out[M_WING_R] = makeBlade(-0.5f, 0.5f, -0.05f, 0.4f, 0.5f, 0.3f, 0);
+  out[M_WING_L] = makeBlade(-0.5f, 0.5f, -0.05f, 0.4f, 0.5f, 0.3f, 1);
+  out[M_RBOX] = makePrism(9.0f, 0.10f);
+  out[M_SQPRISM] = makePrism(4.0f, 0.06f);
+  out[M_NOSE] = makeNose();
+  out[M_FIN] = makeBlade(-0.5f, 0.5f, 0.12f, 0.5f, 0.5f, 0.3f, 2);
+  out[M_NACELLE] = makeNacelle();
+  out[M_NOZZLE] = makeNozzle();
   out[M_CRYSTAL] = makeCrystal();
   for (int i = 0; i < MESH_COUNT; ++i) g_meshRadius[i] = 0.5f;
   g_meshRadius[M_CRYSTAL] = 0.3f;
